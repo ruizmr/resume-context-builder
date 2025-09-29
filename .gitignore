@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 /repomix-output.md
 /output/
+/resume-dataset/
 /resume-dataset-md/
 .streamlit/
 /uploads/
