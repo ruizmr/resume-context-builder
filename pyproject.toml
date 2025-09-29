@@ -30,6 +30,7 @@ force-include = { "hr_tools/hr_instructions.md" = "hr_tools/hr_instructions.md" 
 [project.optional-dependencies]
 full = [
   "markitdown[all]==0.1.3",
+  "onnxruntime==1.23.0; sys_platform == 'darwin'",
 ]
 
 
