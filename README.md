@@ -2,49 +2,49 @@
 
 Pipeline to convert resume PDFs to Markdown (MarkItDown), package into a single LLM-ready context (Repomix), and provide a Streamlit UI to copy/download the result.
 
-## Install/Run via uv (recommended)
+## Quick start (uv)
 
 ### macOS/Linux (minimal)
 ```bash
 sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git resume-ui'
 ```
 
-### macOS/Linux (full MarkItDown extras)
+### macOS/Linux (full extras)
 ```bash
 sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui'
 ```
 
-### Windows PowerShell (minimal)
+### Windows (minimal)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git resume-ui"
 ```
 
-### Windows PowerShell (full MarkItDown extras)
+### Windows (full extras)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui"
 ```
 
-Use the sidebar to set directories and generate the packaged context. Download the final Markdown for copy-paste into your agent.
+Use the sidebar to upload files or point to a folder. Download/copy packaged chunks.
 
-## Install a persistent shortcut (recommended)
-Create a command shim so subsequent runs are just `resume-ui`.
+## Install a shortcut (one-time)
+Creates a persistent `resume-ui` command on your PATH.
 
 ### macOS/Linux (minimal)
 ```bash
 sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uv tool install --python 3.12 --force git+https://github.com/ruizmr/resume-context-builder.git && echo "Installed. Next time just run: resume-ui"'
 ```
 
-### macOS/Linux (full MarkItDown extras)
+### macOS/Linux (full extras)
 ```bash
 sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uv tool install --python 3.12 --force "git+https://github.com/ruizmr/resume-context-builder.git?extra=full" && echo "Installed. Next time just run: resume-ui"'
 ```
 
-### Windows PowerShell (minimal)
+### Windows (minimal)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uv tool install --python 3.12 --force git+https://github.com/ruizmr/resume-context-builder.git; Write-Host 'Installed. Next time just run: resume-ui'"
 ```
 
-### Windows PowerShell (full MarkItDown extras)
+### Windows (full extras)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uv tool install --python 3.12 --force \"git+https://github.com/ruizmr/resume-context-builder.git?extra=full\"; Write-Host 'Installed. Next time just run: resume-ui'"
 ```
