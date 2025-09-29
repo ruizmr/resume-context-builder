@@ -3,7 +3,20 @@ import sys
 from pathlib import Path
 from typing import Iterable, List
 
-from markitdown import MarkItDown
+# Optional dependency: prefer MarkItDown when available
+try:
+	from markitdown import MarkItDown  # type: ignore
+	HAS_MARKITDOWN = True
+except Exception:  # pragma: no cover
+	MarkItDown = None  # type: ignore
+	HAS_MARKITDOWN = False
+
+# Fallback for PDF-only conversion when MarkItDown is not installed
+try:
+	from pdfminer.high_level import extract_text as pdf_extract_text  # type: ignore
+	HAS_PDFMINER = True
+except Exception:  # pragma: no cover
+	HAS_PDFMINER = False
 
 
 def find_input_files(root: Path) -> List[Path]:
@@ -28,10 +41,18 @@ def ensure_directory(path: Path) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def convert_file_to_markdown(src_path: Path, output_path: Path, markitdown_client: MarkItDown) -> None:
-	"""Convert a single file to Markdown using MarkItDown and write to output_path."""
-	result = markitdown_client.convert_local(str(src_path))
-	markdown_text = result.markdown
+def convert_file_to_markdown(src_path: Path, output_path: Path, markitdown_client: "MarkItDown | None") -> None:
+	"""Convert a single file to Markdown; prefer MarkItDown, fallback to pdfminer for PDFs."""
+	markdown_text: str | None = None
+	if HAS_MARKITDOWN and markitdown_client is not None:
+		result = markitdown_client.convert_local(str(src_path))
+		markdown_text = result.markdown
+	elif src_path.suffix.lower() == ".pdf" and HAS_PDFMINER:
+		text = pdf_extract_text(str(src_path)) or ""
+		markdown_text = f"# {src_path.name}\n\n" + text
+	else:
+		raise RuntimeError("No converter available for this file type without MarkItDown installed.")
+
 	ensure_directory(output_path)
 	output_path.write_text(markdown_text, encoding="utf-8")
 
@@ -51,7 +72,7 @@ def convert_documents_to_markdown(
 	output_root.mkdir(parents=True, exist_ok=True)
 
 	# Prefer builtins only; avoid optional heavy backends that may fail to install
-	md_client = MarkItDown(enable_builtins=True, enable_plugins=False)
+	md_client = MarkItDown(enable_builtins=True, enable_plugins=False) if HAS_MARKITDOWN else None
 	generated: List[Path] = []
 
 	for src in find_input_files(input_root):
