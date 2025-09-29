@@ -50,7 +50,8 @@ def convert_documents_to_markdown(
 	output_root = Path(output_dir).expanduser().resolve()
 	output_root.mkdir(parents=True, exist_ok=True)
 
-	md_client = MarkItDown()
+	# Prefer builtins only; avoid optional heavy backends that may fail to install
+	md_client = MarkItDown(enable_builtins=True, enable_plugins=False)
 	generated: List[Path] = []
 
 	for src in find_input_files(input_root):

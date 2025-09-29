@@ -39,4 +39,18 @@ PY
 streamlit run /home/overseer1/hr2/app.py
 ```
 
+## Install/Run via uv (minimal)
+
+Minimal install (PDF and common formats) avoids `onnxruntime` on macOS:
+
+```bash
+uvx --from git+https://github.com/ruizmr/resume-context-builder.git resume-ui
+```
+
+To enable all MarkItDown converters (may require platform-specific deps), use the `full` extra:
+
+```bash
+uvx --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui
+```
+
 Use the sidebar to set directories and generate the packaged context. Download the final Markdown for copy-paste into your agent.
