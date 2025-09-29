@@ -57,3 +57,17 @@ resume-ui
 Troubleshooting PATH
 - macOS/Linux: ensure `~/.local/bin` is on PATH (e.g., add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc).
 - Windows: ensure `%USERPROFILE%\.local\bin` is on PATH, then open a new terminal.
+
+If `resume-ui` is not found right after install
+- Quick fix (macOS/Linux):
+```bash
+source "$HOME/.local/bin/env" || { echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc; }
+```
+- Run via absolute path once:
+```bash
+"$HOME/.local/bin/resume-ui"
+```
+- Windows PowerShell:
+```powershell
+& "$env:USERPROFILE\.local\bin\resume-ui.exe"
+```
