@@ -139,7 +139,7 @@ if "out_paths" in st.session_state and st.session_state["out_paths"]:
 		)
 	with col_cp:
 		b64 = base64.b64encode(selected_content.encode("utf-8")).decode("ascii")
-		html = f"""
+		tmpl = """
 		<style>
 		.copy-wrap {{ position: relative; width: 100%; }}
 		.copy-btn {{
@@ -160,7 +160,7 @@ if "out_paths" in st.session_state and st.session_state["out_paths"]:
 		</style>
 		<script>
 		async function copyChunk(){
-		  const text = atob('{b64}');
+		  const text = atob('{{B64}}');
 		  try { await navigator.clipboard.writeText(text); } catch(e) {
 		    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
 		    ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e2) {} document.body.removeChild(ta);
@@ -180,6 +180,7 @@ if "out_paths" in st.session_state and st.session_state["out_paths"]:
 		  <span id=\"copy-toast\" class=\"toast\"><span class=\"check\">✓</span> Copied to clipboard</span>
 		</div>
 		"""
+		html = tmpl.replace("{{B64}}", b64)
 		components.html(html, height=110)
 
 	st.text_area("Preview", selected_content, height=400)
