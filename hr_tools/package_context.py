@@ -11,6 +11,7 @@ from repomix import (
 	RepomixConfigOutput,
 	RepomixConfigSecurity,
 	RepomixOutputStyle,
+    load_config as repomix_load_config,
 )
 
 import tiktoken
@@ -160,6 +161,7 @@ def package_markdown_directory(
 	max_tokens: Optional[int] = None,
 	encoding_name: str = "o200k_base",
     predefined_md_files: Optional[List[str | Path]] = None,
+    config_path: Optional[str | Path] = None,
 ) -> List[Path]:
 	"""Package Markdown files under source_dir into a single output file using Repomix.
 
@@ -169,11 +171,25 @@ def package_markdown_directory(
 	output_path = Path(output_file).expanduser().resolve()
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
-	config = create_hr_config(
-		output_file=output_path,
-		header_text=header_text,
-		instruction_file_path=Path(instruction_file) if instruction_file else None,
-	)
+	# Load custom config if provided, else create default HR config
+	if config_path:
+		cfg_dir = directory
+		try:
+			config = repomix_load_config(Path(cfg_dir), Path(cfg_dir), str(config_path), None)
+		except Exception as e:
+			raise RuntimeError(f"Failed to load Repomix config from {config_path}: {e}")
+		# Always override output path and optional header/instructions for this run
+		config.output.file_path = str(output_path)
+		if header_text:
+			config.output.header_text = header_text
+		if instruction_file:
+			config.output.instruction_file_path = str(instruction_file)
+	else:
+		config = create_hr_config(
+			output_file=output_path,
+			header_text=header_text,
+			instruction_file_path=Path(instruction_file) if instruction_file else None,
+		)
 
 	processor = RepoProcessor(directory=str(directory), config=config)
 	# Explicitly set file list to avoid ignore/include mismatches
