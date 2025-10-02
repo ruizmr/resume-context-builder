@@ -37,34 +37,30 @@ with st.sidebar:
 	md_dir = st.text_input("Output Markdown directory", value=default_md_dir)
 	output_file = st.text_input("Packaged context output file", value=default_out_file)
 	use_hr_instructions = st.checkbox("Include HR instructions", value=True)
-	instruction_file = st.text_input("Instruction file path", value=default_instr)
+	instruction_file = st.text_input("Instruction file path (Markdown)", value=default_instr)
 	header_text = st.text_input("Header text", value="HR Candidate Resume Pack")
 	max_tokens = st.number_input("Max tokens per file (0 = no split)", value=120000, min_value=0, step=1000)
 	encoding_name = st.selectbox("Tokenizer/encoding", options=["o200k_base", "cl100k_base"], index=0)
 
 	st.divider()
-	st.caption("Repomix config (optional)")
-	custom_cfg_enabled = st.checkbox("Use custom repomix.config.json", value=False)
-	config_path = st.text_input("Config path", value="" if not custom_cfg_enabled else str(Path.home() / "repomix.config.json"))
-	config_editor = None
-	if custom_cfg_enabled:
-		default_json = """{
-		  "output": {"file_path": "repomix-output.md", "style": "markdown", "header_text": "", "instruction_file_path": "", "remove_comments": false, "remove_empty_lines": false, "top_files_length": 5, "show_line_numbers": false, "copy_to_clipboard": false, "include_empty_directories": false, "calculate_tokens": false, "show_file_stats": false, "show_directory_structure": true, "parsable_style": false, "truncate_base64": false, "stdout": false, "include_diffs": false},
-		  "security": {"enable_security_check": true, "exclude_suspicious_files": true},
-		  "compression": {"enabled": false, "keep_signatures": true, "keep_docstrings": true, "keep_interfaces": true},
-		  "ignore": {"custom_patterns": [], "use_gitignore": true, "use_default_ignore": true},
-		  "include": []
-		}"""
-		st.caption("Edit JSON below and click Save")
-		config_editor = st.text_area("repomix.config.json", value=default_json, height=220)
-		if st.button("Save config", use_container_width=True):
+	st.caption("Instructions file (optional)")
+	st.write("This Markdown is prepended to the packaged output to guide the LLM.")
+	new_instr = st.text_area("Edit instructions (preview only)", value=(Path(default_instr).read_text(encoding="utf-8") if default_instr and os.path.isfile(default_instr) else ""), height=180)
+	save_instr_path = st.text_input("Save instructions as", value=str((Path.home() / "instruction.md")))
+	col_si1, col_si2 = st.columns(2)
+	with col_si1:
+		if st.button("Save instructions", use_container_width=True):
 			try:
-				cfg_path = Path(config_path).expanduser().resolve()
-				cfg_path.parent.mkdir(parents=True, exist_ok=True)
-				cfg_path.write_text(config_editor or default_json, encoding="utf-8")
-				st.success(f"Saved config to {cfg_path}")
+				p = Path(save_instr_path).expanduser().resolve()
+				p.parent.mkdir(parents=True, exist_ok=True)
+				p.write_text(new_instr or "", encoding="utf-8")
+				st.success(f"Saved instructions to {p}")
 			except Exception as e:
-				st.error(f"Failed to save config: {e}")
+				st.error(f"Failed to save instructions: {e}")
+	with col_si2:
+		use_saved = st.button("Use saved instructions", use_container_width=True)
+	if use_saved:
+		instruction_file = save_instr_path
 
 st.subheader("Input")
 uploaded_files = st.file_uploader("Upload ZIP or supported files", type=None, accept_multiple_files=True)
@@ -125,7 +121,6 @@ if start:
 			max_tokens=max_tokens or None,
 			encoding_name=encoding_name,
 			predefined_md_files=[str(p) for p in generated_md],
-			config_path=(config_path if custom_cfg_enabled and config_path else None),
 		)
 		st.success(f"Packaged {len(out_paths)} file(s)")
 		try:
