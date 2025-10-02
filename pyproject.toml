@@ -3,13 +3,13 @@ requires = ["hatchling>=1.20.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "resume-context-builder"
+name = "context-packager"
 version = "0.1.0"
-description = "Convert resumes and other docs to Markdown with MarkItDown, package with Repomix, and serve a Streamlit UI for copyable LLM context."
+description = "Convert documents to Markdown (MarkItDown), package with Repomix, and serve a Streamlit UI for copyable LLM context."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "HR Tools" }]
+authors = [{ name = "Context Tools" }]
 dependencies = [
   "repomix==0.3.4",
   "streamlit==1.50.0",
@@ -18,14 +18,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/overseer1/resume-context-builder"
+Homepage = "https://github.com/ruizmr/resume-context-builder"
 
 [project.scripts]
-resume-ui = "resume_ui.cli:main"
+context-ui = "resume_ui.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["resume_ui", "hr_tools"]
-force-include = { "hr_tools/hr_instructions.md" = "hr_tools/hr_instructions.md" }
+force-include = { "hr_tools/instruction.md" = "hr_tools/instruction.md" }
 
 [project.optional-dependencies]
 full = [

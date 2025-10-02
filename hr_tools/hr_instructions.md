@@ -1,4 +1,4 @@
-# Instructions for HR Candidate Context Packaging
+# Instructions for Context Packaging
 
 Focus on candidate-relevant details:
 
@@ -11,7 +11,7 @@ Focus on candidate-relevant details:
 
 Formatting:
 
-- Use concise bullet points per candidate
-- Preserve headings per candidate and the original relative file path
+- Use concise bullet points
+- Preserve headings and original relative file paths
 - Exclude images, raw data tables, and repetitive boilerplate
 - Keep the output compact and copy-paste friendly

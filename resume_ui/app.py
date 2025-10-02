@@ -13,17 +13,17 @@ from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from hr_tools.package_context import package_markdown_directory
 
 
-st.set_page_config(page_title="Resume Context Builder", layout="wide", initial_sidebar_state="collapsed")
-st.title("Resume Context Builder")
+st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
+st.title("Context Packager")
 
 # Defaults designed to be portable on any machine
 default_pdf_dir = ""
-default_md_dir = str(Path.home() / "resume-context-md")
-default_out_file = str(Path.home() / "resume-context-output" / "context.md")
+default_md_dir = str(Path.home() / "context-packager-md")
+default_out_file = str(Path.home() / "context-packager-output" / "context.md")
 
 try:
-	# Try to resolve packaged instructions file
-	_instr = resources.files("hr_tools").joinpath("hr_instructions.md")
+    # Try to resolve packaged instructions file
+    _instr = resources.files("hr_tools").joinpath("instruction.md")
 	default_instr = str(_instr) if _instr and _instr.is_file() else ""
 except Exception:
 	default_instr = ""

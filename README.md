@@ -1,6 +1,6 @@
-# Resume Context Builder
+# Context Packager
 
-Pipeline to convert resume PDFs to Markdown (MarkItDown), package into a single LLM-ready context (Repomix), and provide a Streamlit UI to copy/download the result.
+Convert documents to Markdown (MarkItDown), package into a single LLM-ready context (Repomix), and use a sleek Streamlit UI to copy/download.
 
 ## 1. Quick start (uv)
 
