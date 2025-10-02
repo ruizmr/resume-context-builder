@@ -17,7 +17,7 @@ sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui"
 ```
 
-Use the sidebar to upload files or point to a folder. Download/copy packaged chunks.
+Use the sidebar to upload files or point to a folder. Download/copy packaged chunks. Check "Include in knowledge base" to persist chunks and use the built-in search.
 
 ## 2. Install a shortcut (one-time)
 Creates a persistent `resume-ui` command on your PATH.
