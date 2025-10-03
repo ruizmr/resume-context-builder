@@ -100,16 +100,34 @@ if top_clicked and q_top.strip():
         docs = fetch_all_chunks(engine)
         searcher = HybridSearcher()
         searcher.fit(docs)
-        results = searcher.search(q_top, top_k=5)
+        top_k = int(st.session_state.get("kb_top_k", 5))
+        results = searcher.search(q_top, top_k=top_k)
         with top_results:
             if not results:
                 st.info("No results")
             else:
+                # Aggregate all results into one context window
+                sections = []
                 for cid, score, path, cname, snippet, full_text in results:
-                    st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
-                    st.caption("Lineage: original file path and chunk name shown above.")
-                    st.code(snippet[: 400])
-                    render_copy_button("Copy this chunk", full_text, height=80)
+                    header = f"{path} :: {cname} — score {score:.3f}"
+                    sections.append(f"{header}\n\n{full_text.strip()}")
+                aggregated = "\n\n---\n\n".join(sections)
+
+                # Enforce overall token cap using the same token limit as packaging
+                max_tok = int(st.session_state.get("max_tokens_config") or 0)
+                enc_name = st.session_state.get("encoding_name", "o200k_base")
+                if max_tok and max_tok > 0:
+                    try:
+                        enc = tiktoken.get_encoding(enc_name)
+                        toks = enc.encode(aggregated)
+                        if len(toks) > max_tok:
+                            aggregated = enc.decode(toks[:max_tok])
+                    except Exception:
+                        pass
+
+                st.subheader("Search results")
+                render_copy_button("Copy all results", aggregated, height=80)
+                st.text_area("Aggregated results", aggregated, height=400)
     except Exception as e:
         st.error(f"Search failed: {e}")
 
@@ -125,8 +143,7 @@ with st.sidebar:
     # moved include_kb next to build controls below
     st.divider()
     st.caption("KB search configuration")
-    kb_top_k = st.number_input("Results to return", value=5, min_value=1, max_value=50, step=1)
-    kb_snippet_len = st.number_input("Snippet length (chars)", value=400, min_value=50, max_value=4000, step=50)
+    kb_top_k = st.number_input("Results to return", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -165,7 +182,7 @@ fallback_dir_main = st.text_input("Or enter a directory path (optional)", value=
 st.write("")
 left, mid, right = st.columns([1,2,1])
 with mid:
-    include_kb = st.checkbox("Include in knowledge base (stateful)", value=False)
+    include_kb = st.checkbox("Include in knowledge base (stateful)", value=True)
     start = st.button("Build context", type="primary", use_container_width=True)
     clear = st.button("Reset form", use_container_width=True)
 
