@@ -24,10 +24,11 @@ Homepage = "https://github.com/ruizmr/resume-context-builder"
 
 [project.scripts]
 context-ui = "resume_ui.cli:main"
+resume-ui = "resume_ui.cli:main"
 context-upsert = "resume_ui.upsert_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["resume_ui", "hr_tools"]
+packages = ["resume_ui", "hr_tools", "kb"]
 force-include = { "hr_tools/instruction.md" = "hr_tools/instruction.md" }
 
 [project.optional-dependencies]

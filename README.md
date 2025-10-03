@@ -19,6 +19,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv
 
 Use the sidebar to upload files or point to a folder. Download/copy packaged chunks. Check "Include in knowledge base" to persist chunks and use the built-in search.
 
+KB persistence defaults to a local SQLite file at `~/.context-packager-state/context.db`. To use a shared DB, set `CONTEXT_DB_URL` before launching, for example on Linux/macOS:
+```bash
+export CONTEXT_DB_URL="sqlite:////absolute/path/to/context.db"
+resume-ui
+```
+
 ## 2. Install a shortcut (one-time)
 Creates a persistent `resume-ui` command on your PATH.
 
