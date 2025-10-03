@@ -36,6 +36,7 @@ force-include = { "hr_tools/instruction.md" = "hr_tools/instruction.md" }
 full = [
   "markitdown[all]==0.1.3",
   "onnxruntime==1.23.0; sys_platform == 'darwin'",
+  "watchdog>=4.0.0",
 ]
 
 

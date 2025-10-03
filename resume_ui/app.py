@@ -86,27 +86,33 @@ def render_copy_button(label: str, text: str, height: int = 110):
     html = tmpl.replace("{{B64}}", b64).replace("{{LABEL}}", label)
     components.html(html, height=height)
 
-# Global search bar pinned at top
-top_cols = st.columns([8, 1])
-with top_cols[0]:
-    q_top = st.text_input("Search knowledge base", value="", placeholder="Search...", label_visibility="collapsed")
-with top_cols[1]:
-    top_clicked = st.button("Search", key="top_search_btn")
+# Global search bar pinned at top (independent form)
+with st.form("kb_search_form", clear_on_submit=False):
+    top_cols = st.columns([8, 1])
+    with top_cols[0]:
+        st.text_input(
+            "Search knowledge base",
+            value=st.session_state.get("q_top", ""),
+            placeholder="Search...",
+            label_visibility="collapsed",
+            key="q_top",
+        )
+    with top_cols[1]:
+        submitted_search = st.form_submit_button("Search")
 
-top_results = st.container()
-if top_clicked and q_top.strip():
-    try:
-        engine = get_engine()
-        docs = fetch_all_chunks(engine)
-        searcher = HybridSearcher()
-        searcher.fit(docs)
-        top_k = int(st.session_state.get("kb_top_k", 5))
-        results = searcher.search(q_top, top_k=top_k)
-        with top_results:
+    if submitted_search and st.session_state.get("q_top", "").strip():
+        try:
+            engine = get_engine()
+            docs = fetch_all_chunks(engine)
+            searcher = HybridSearcher()
+            searcher.fit(docs)
+            top_k = int(st.session_state.get("kb_top_k", 5))
+            results = searcher.search(st.session_state["q_top"], top_k=top_k)
+
             if not results:
-                st.info("No results")
+                st.session_state["kb_results_agg"] = ""
+                st.session_state["kb_results_list"] = []
             else:
-                # Aggregate all results into one context window
                 sections = []
                 for cid, score, path, cname, snippet, full_text in results:
                     header = f"{path} :: {cname} — score {score:.3f}"
@@ -125,11 +131,21 @@ if top_clicked and q_top.strip():
                     except Exception:
                         pass
 
-                st.subheader("Search results")
-                render_copy_button("Copy all results", aggregated, height=80)
-                st.text_area("Aggregated results", aggregated, height=400)
-    except Exception as e:
-        st.error(f"Search failed: {e}")
+                st.session_state["kb_results_agg"] = aggregated
+                st.session_state["kb_results_list"] = results
+        except Exception as e:
+            st.session_state["kb_results_agg"] = ""
+            st.session_state["kb_results_list"] = []
+            st.error(f"Search failed: {e}")
+
+# Always render last search results if present (no refresh required)
+if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] is not None:
+    if st.session_state["kb_results_agg"]:
+        st.subheader("Search results")
+        render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
+        st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
+    else:
+        st.info("No results")
 
 with st.sidebar:
     st.header("Settings")

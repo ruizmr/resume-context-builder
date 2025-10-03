@@ -19,6 +19,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv
 
 Use the sidebar to upload files or point to a folder. Download/copy packaged chunks. Check "Include in knowledge base" to persist chunks and use the built-in search.
 
+For smoother live reload and file watching, the `full` extras include Watchdog.
+
 KB persistence defaults to a local SQLite file at `~/.context-packager-state/context.db`. To use a shared DB, set `CONTEXT_DB_URL` before launching, for example on Linux/macOS:
 ```bash
 export CONTEXT_DB_URL="sqlite:////absolute/path/to/context.db"
