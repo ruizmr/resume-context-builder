@@ -19,6 +19,29 @@ from kb.search import HybridSearcher
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
 st.title("Context Packager")
 
+# Global search bar pinned at top
+top_cols = st.columns([6, 1])
+with top_cols[0]:
+    q_top = st.text_input("Search knowledge base", value="", placeholder="Search...", label_visibility="collapsed")
+with top_cols[1]:
+    if st.button("Search", key="top_search_btn"):
+        try:
+            engine = get_engine()
+            docs = fetch_all_chunks(engine)
+            searcher = HybridSearcher()
+            searcher.fit(docs)
+            results = searcher.search(q_top, top_k=5)
+            if not results:
+                st.info("No results")
+            else:
+                for cid, score, path, cname, snippet, full_text in results:
+                    st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
+                    st.caption("Lineage: original file path and chunk name shown above.")
+                    st.code(snippet[: 400])
+                    render_copy_button("Copy this chunk", full_text, height=80)
+        except Exception as e:
+            st.error(f"Search failed: {e}")
+
 # Defaults designed to be portable on any machine
 default_pdf_dir = ""
 default_md_dir = str(Path.home() / "context-packager-md")
@@ -95,7 +118,7 @@ with st.sidebar:
     header_text = st.text_input("Document header", value="Context Pack")
     max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
     encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
-    include_kb = st.checkbox("Include in knowledge base (stateful)", value=False)
+    # moved include_kb next to build controls below
     st.divider()
     st.caption("KB search configuration")
     kb_top_k = st.number_input("Results to return", value=5, min_value=1, max_value=50, step=1)
@@ -138,6 +161,7 @@ fallback_dir_main = st.text_input("Or enter a directory path (optional)", value=
 st.write("")
 left, mid, right = st.columns([1,2,1])
 with mid:
+    include_kb = st.checkbox("Include in knowledge base (stateful)", value=False)
     start = st.button("Build context", type="primary", use_container_width=True)
     clear = st.button("Reset form", use_container_width=True)
 

@@ -17,19 +17,25 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_database_url() -> str:
 	# Prefer explicit env vars; fallback to stateful SQLite file
-	url = os.getenv("CONTEXT_DB_URL") or os.getenv("DATABASE_URL")
+	url = (
+		os.getenv("CONTEXT_DB_URL")
+		or os.getenv("DATABASE_URL")
+		or os.getenv("PGSERVER_URL")
+		or os.getenv("PGSERVER")
+	)
 	if url:
 		return url
 	return f"sqlite:///{(STATE_DIR / 'context.db').as_posix()}"
 
 
 def get_engine(echo: bool = False) -> Engine:
-	engine = create_engine(get_database_url(), echo=echo, future=True)
+	engine = create_engine(get_database_url(), echo=echo, future=True, pool_pre_ping=True)
 	init_schema(engine)
 	return engine
 
 
 def init_schema(engine: Engine) -> None:
+	# Split into single statements for SQLite compatibility
 	with engine.begin() as conn:
 		conn.execute(
 			text(
@@ -42,8 +48,14 @@ def init_schema(engine: Engine) -> None:
 					content TEXT,
 					created_at TEXT,
 					updated_at TEXT
-				);
-				CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);
+				)
+				"""
+			)
+		)
+		conn.execute(
+			text(
+				"""
+				CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash)
 				"""
 			)
 		)
