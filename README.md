@@ -48,6 +48,37 @@ Next runs after install:
 resume-ui
 ```
 
+Available commands after install:
+```bash
+# Launch UI (Home + Manage knowledge)
+resume-ui
+
+# Convert to Markdown then upsert to KB (cron-friendly)
+context-ingest "/path/to/input_dir" "/path/to/markdown_out_dir"
+
+# Upsert existing Markdown into KB
+context-upsert "/path/to/markdown_out_dir"
+```
+
+One-shot (no install):
+```bash
+# UI
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui'
+
+# Ingest (convert + upsert)
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full context-ingest "/path/to/input_dir" "/path/to/markdown_out_dir"'
+```
+
+Database configuration:
+```bash
+# SQLite (default)
+# ~/.context-packager-state/context.db
+
+# Postgres
+export CONTEXT_DB_URL='postgresql+psycopg://user:pass@host:5432/dbname'
+resume-ui
+```
+
 ## 3. Troubleshooting PATH
 - macOS/Linux: ensure `~/.local/bin` is on PATH (e.g., add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc).
 - Windows: ensure `%USERPROFILE%\.local\bin` is on PATH, then open a new terminal.
