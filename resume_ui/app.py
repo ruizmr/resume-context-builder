@@ -103,9 +103,15 @@ with st.form("kb_search_form", clear_on_submit=False):
     if submitted_search and st.session_state.get("q_top", "").strip():
         try:
             engine = get_engine()
-            docs = fetch_all_chunks(engine)
-            searcher = HybridSearcher()
-            searcher.fit(docs)
+            # cache searcher in session to avoid refit on every search
+            if "kb_searcher" not in st.session_state or st.session_state.get("kb_searcher_docs_len") != None and st.session_state.get("kb_searcher_docs_len") !=  len(fetch_all_chunks(engine)):
+                docs = fetch_all_chunks(engine)
+                searcher = HybridSearcher()
+                searcher.fit(docs)
+                st.session_state["kb_searcher"] = searcher
+                st.session_state["kb_searcher_docs_len"] = len(docs)
+            else:
+                searcher = st.session_state["kb_searcher"]
             top_k = int(st.session_state.get("kb_top_k", 5))
             min_score = float(st.session_state.get("kb_min_score", 0.0))
             results = searcher.search(st.session_state["q_top"], top_k=top_k)
@@ -264,6 +270,9 @@ if start:
             try:
                 count = upsert_markdown_files([Path(p) for p in generated_md])
                 st.success(f"Upserted {count} chunk(s) into knowledge base.")
+                # Invalidate cached searcher so new docs are included next search
+                st.session_state.pop("kb_searcher", None)
+                st.session_state.pop("kb_searcher_docs_len", None)
             except Exception as e:
                 st.error(f"KB upsert failed: {e}")
 

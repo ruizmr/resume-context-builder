@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import List, Tuple
+import numpy as np
 
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import linear_kernel
 
 
 class HybridSearcher:
@@ -13,6 +14,10 @@ class HybridSearcher:
 			lowercase=True,
 			ngram_range=(1, 2),
 			max_features=50000,
+			stop_words="english",
+			sublinear_tf=True,
+			max_df=0.95,
+			norm="l2",
 		)
 		self.matrix = None
 		self.ids: List[int] = []
@@ -31,11 +36,23 @@ class HybridSearcher:
 		"""Return (id, score, path, chunk_name, snippet, full_text)."""
 		if not self.texts:
 			return []
+		query = (query or "").strip()
+		if not query:
+			return []
 		q_vec = self.vectorizer.transform([query])
-		scores = cosine_similarity(q_vec, self.matrix).ravel()
-		ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
+		scores = linear_kernel(q_vec, self.matrix).ravel()
+		k = min(top_k, scores.shape[0])
+		if k <= 0:
+			return []
+		# Fast top-k selection
+		if k < scores.shape[0]:
+			candidate_idx = np.argpartition(scores, -k)[-k:]
+			ordered_idx = candidate_idx[np.argsort(scores[candidate_idx])[::-1]]
+		else:
+			ordered_idx = np.argsort(scores)[::-1]
 		results: List[Tuple[int, float, str, str, str, str]] = []
-		for idx, score in ranked:
+		for idx in ordered_idx[:k]:
+			score = scores[idx]
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
 			text = self.texts[idx]
