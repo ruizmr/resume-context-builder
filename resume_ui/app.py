@@ -92,64 +92,64 @@ home_tab, manage_tab = st.tabs(["Home", "Manage knowledge"])
 with home_tab:
     # Global search bar pinned at top (independent form)
     with st.form("kb_search_form", clear_on_submit=False):
-    top_cols = st.columns([8, 1])
-    with top_cols[0]:
-        st.text_input(
-            "Search knowledge base",
-            value=st.session_state.get("q_top", ""),
-            placeholder="Search...",
-            label_visibility="collapsed",
-            key="q_top",
-        )
-    with top_cols[1]:
-        submitted_search = st.form_submit_button("Search")
+        top_cols = st.columns([8, 1])
+        with top_cols[0]:
+            st.text_input(
+                "Search knowledge base",
+                value=st.session_state.get("q_top", ""),
+                placeholder="Search...",
+                label_visibility="collapsed",
+                key="q_top",
+            )
+        with top_cols[1]:
+            submitted_search = st.form_submit_button("Search")
 
-    if submitted_search and st.session_state.get("q_top", "").strip():
-        try:
-            engine = get_engine()
-            # cache searcher in session to avoid refit on every search
-            if "kb_searcher" not in st.session_state or st.session_state.get("kb_searcher_docs_len") != None and st.session_state.get("kb_searcher_docs_len") !=  len(fetch_all_chunks(engine)):
-                docs = fetch_all_chunks(engine)
-                searcher = HybridSearcher()
-                searcher.fit(docs)
-                st.session_state["kb_searcher"] = searcher
-                st.session_state["kb_searcher_docs_len"] = len(docs)
-            else:
-                searcher = st.session_state["kb_searcher"]
-            top_k = int(st.session_state.get("kb_top_k", 5))
-            min_score = float(st.session_state.get("kb_min_score", 0.0))
-            results = searcher.search(st.session_state["q_top"], top_k=top_k)
-            # filter by minimum score
-            results = [r for r in results if r[1] >= min_score]
+        if submitted_search and st.session_state.get("q_top", "").strip():
+            try:
+                engine = get_engine()
+                # cache searcher in session to avoid refit on every search
+                if "kb_searcher" not in st.session_state or (st.session_state.get("kb_searcher_docs_len") is not None and st.session_state.get("kb_searcher_docs_len") != len(fetch_all_chunks(engine))):
+                    docs = fetch_all_chunks(engine)
+                    searcher = HybridSearcher()
+                    searcher.fit(docs)
+                    st.session_state["kb_searcher"] = searcher
+                    st.session_state["kb_searcher_docs_len"] = len(docs)
+                else:
+                    searcher = st.session_state["kb_searcher"]
+                top_k = int(st.session_state.get("kb_top_k", 5))
+                min_score = float(st.session_state.get("kb_min_score", 0.0))
+                results = searcher.search(st.session_state["q_top"], top_k=top_k)
+                # filter by minimum score
+                results = [r for r in results if r[1] >= min_score]
 
-            if not results:
+                if not results:
+                    st.session_state["kb_results_agg"] = ""
+                    st.session_state["kb_results_list"] = []
+                else:
+                    sections = []
+                    for cid, score, path, cname, snippet, full_text in results:
+                        header = f"{path} :: {cname} — score {score:.3f}"
+                        sections.append(f"{header}\n\n{full_text.strip()}")
+                    aggregated = "\n\n---\n\n".join(sections)
+
+                    # Enforce overall token cap using the same token limit as packaging
+                    max_tok = int(st.session_state.get("max_tokens_config") or 0)
+                    enc_name = st.session_state.get("encoding_name", "o200k_base")
+                    if max_tok and max_tok > 0:
+                        try:
+                            enc = tiktoken.get_encoding(enc_name)
+                            toks = enc.encode(aggregated)
+                            if len(toks) > max_tok:
+                                aggregated = enc.decode(toks[:max_tok])
+                        except Exception:
+                            pass
+
+                    st.session_state["kb_results_agg"] = aggregated
+                    st.session_state["kb_results_list"] = results
+            except Exception as e:
                 st.session_state["kb_results_agg"] = ""
                 st.session_state["kb_results_list"] = []
-            else:
-                sections = []
-                for cid, score, path, cname, snippet, full_text in results:
-                    header = f"{path} :: {cname} — score {score:.3f}"
-                    sections.append(f"{header}\n\n{full_text.strip()}")
-                aggregated = "\n\n---\n\n".join(sections)
-
-                # Enforce overall token cap using the same token limit as packaging
-                max_tok = int(st.session_state.get("max_tokens_config") or 0)
-                enc_name = st.session_state.get("encoding_name", "o200k_base")
-                if max_tok and max_tok > 0:
-                    try:
-                        enc = tiktoken.get_encoding(enc_name)
-                        toks = enc.encode(aggregated)
-                        if len(toks) > max_tok:
-                            aggregated = enc.decode(toks[:max_tok])
-                    except Exception:
-                        pass
-
-                st.session_state["kb_results_agg"] = aggregated
-                st.session_state["kb_results_list"] = results
-        except Exception as e:
-            st.session_state["kb_results_agg"] = ""
-            st.session_state["kb_results_list"] = []
-            st.error(f"Search failed: {e}")
+                st.error(f"Search failed: {e}")
 
     # Always render last search results if present (no refresh required)
     if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] is not None:
