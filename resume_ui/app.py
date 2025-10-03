@@ -19,29 +19,6 @@ from kb.search import HybridSearcher
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
 st.title("Context Packager")
 
-# Global search bar pinned at top
-top_cols = st.columns([6, 1])
-with top_cols[0]:
-    q_top = st.text_input("Search knowledge base", value="", placeholder="Search...", label_visibility="collapsed")
-with top_cols[1]:
-    if st.button("Search", key="top_search_btn"):
-        try:
-            engine = get_engine()
-            docs = fetch_all_chunks(engine)
-            searcher = HybridSearcher()
-            searcher.fit(docs)
-            results = searcher.search(q_top, top_k=5)
-            if not results:
-                st.info("No results")
-            else:
-                for cid, score, path, cname, snippet, full_text in results:
-                    st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
-                    st.caption("Lineage: original file path and chunk name shown above.")
-                    st.code(snippet[: 400])
-                    render_copy_button("Copy this chunk", full_text, height=80)
-        except Exception as e:
-            st.error(f"Search failed: {e}")
-
 # Defaults designed to be portable on any machine
 default_pdf_dir = ""
 default_md_dir = str(Path.home() / "context-packager-md")
@@ -108,6 +85,33 @@ def render_copy_button(label: str, text: str, height: int = 110):
     """
     html = tmpl.replace("{{B64}}", b64).replace("{{LABEL}}", label)
     components.html(html, height=height)
+
+# Global search bar pinned at top
+top_cols = st.columns([8, 1])
+with top_cols[0]:
+    q_top = st.text_input("Search knowledge base", value="", placeholder="Search...", label_visibility="collapsed")
+with top_cols[1]:
+    top_clicked = st.button("Search", key="top_search_btn")
+
+top_results = st.container()
+if top_clicked and q_top.strip():
+    try:
+        engine = get_engine()
+        docs = fetch_all_chunks(engine)
+        searcher = HybridSearcher()
+        searcher.fit(docs)
+        results = searcher.search(q_top, top_k=5)
+        with top_results:
+            if not results:
+                st.info("No results")
+            else:
+                for cid, score, path, cname, snippet, full_text in results:
+                    st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
+                    st.caption("Lineage: original file path and chunk name shown above.")
+                    st.code(snippet[: 400])
+                    render_copy_button("Copy this chunk", full_text, height=80)
+    except Exception as e:
+        st.error(f"Search failed: {e}")
 
 with st.sidebar:
     st.header("Settings")
@@ -263,24 +267,6 @@ if "out_paths" in st.session_state and st.session_state["out_paths"]:
 
     st.text_area("Preview", selected_content, height=400)
 
-st.subheader("Knowledge base search")
-q = st.text_input("Search query", value="")
-if st.button("Search KB"):
-    try:
-        engine = get_engine()
-        docs = fetch_all_chunks(engine)
-        searcher = HybridSearcher()
-        searcher.fit(docs)
-        results = searcher.search(q, top_k=int(kb_top_k))
-        if not results:
-            st.info("No results")
-        else:
-            for cid, score, path, cname, snippet, full_text in results:
-                st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
-                st.caption("Lineage: original file path and chunk name shown above.")
-                st.code(snippet[: int(kb_snippet_len)])
-                render_copy_button("Copy this chunk", full_text, height=80)
-    except Exception as e:
-        st.error(f"Search failed: {e}")
+ # legacy bottom search removed in favor of the top search bar
 
 
