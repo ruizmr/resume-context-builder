@@ -97,3 +97,50 @@ def fetch_all_chunks(engine: Engine) -> List[Tuple[int, str, str, str]]:
 		return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
+def count_chunks(engine: Engine, like: str | None = None) -> int:
+	"""Return total number of chunks, optionally filtered by LIKE pattern."""
+	query = "SELECT COUNT(1) FROM chunks"
+	params = {}
+	if like:
+		query += " WHERE path LIKE :like OR chunk_name LIKE :like OR content LIKE :like"
+		params["like"] = like
+	with engine.begin() as conn:
+		row = conn.execute(text(query), params).fetchone()
+		return int(row[0]) if row else 0
+
+
+def fetch_chunks(engine: Engine, limit: int = 50, offset: int = 0, like: str | None = None) -> List[Tuple[int, str, str, str]]:
+	"""Paginated fetch of (id, path, chunk_name, content) with optional LIKE filter."""
+	base = "SELECT id, path, chunk_name, content FROM chunks"
+	params = {"limit": int(limit), "offset": int(offset)}
+	if like:
+		base += " WHERE path LIKE :like OR chunk_name LIKE :like OR content LIKE :like"
+		params["like"] = like
+	base += " ORDER BY id DESC LIMIT :limit OFFSET :offset"
+	with engine.begin() as conn:
+		rows = conn.execute(text(base), params)
+		return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+def delete_chunks_by_ids(engine: Engine, ids: List[int]) -> int:
+	"""Delete chunks by id list. Returns number of rows deleted."""
+	if not ids:
+		return 0
+	# sanitize to ints and unique
+	safe_ids = []
+	for i in ids:
+		try:
+			safe_ids.append(int(i))
+		except Exception:
+			continue
+	if not safe_ids:
+		return 0
+	placeholders = ", ".join(str(i) for i in sorted(set(safe_ids)))
+	with engine.begin() as conn:
+		res = conn.execute(text(f"DELETE FROM chunks WHERE id IN ({placeholders})"))
+		try:
+			return int(res.rowcount)  # type: ignore[attr-defined]
+		except Exception:
+			return 0
+
+

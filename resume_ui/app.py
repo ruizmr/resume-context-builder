@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from hr_tools.package_context import package_markdown_directory
 from kb.upsert import upsert_markdown_files
-from kb.db import get_engine, fetch_all_chunks
+from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids
 from kb.search import HybridSearcher
 
 
@@ -155,6 +155,87 @@ if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] i
         st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
     else:
         st.info("No results")
+
+# Manage Knowledge Tab
+manage_tabs = st.tabs(["Manage knowledge"])
+with manage_tabs[0]:
+    st.subheader("Manage knowledge base")
+    engine = get_engine()
+
+    # Controls
+    colf, colp, colr = st.columns([4, 1, 1])
+    with colf:
+        filter_text = st.text_input("Filter (path, name, or content)", value=st.session_state.get("kb_m_filter", ""), key="kb_m_filter")
+    with colp:
+        rows_per_page = st.number_input("Rows/page", min_value=5, max_value=200, value=int(st.session_state.get("kb_m_rpp", 25)), step=5, key="kb_m_rpp")
+    with colr:
+        if "kb_m_page" not in st.session_state:
+            st.session_state["kb_m_page"] = 1
+        page = st.number_input("Page", min_value=1, value=int(st.session_state["kb_m_page"]), step=1)
+        st.session_state["kb_m_page"] = int(page)
+
+    like = f"%{filter_text}%" if filter_text else None
+    total = count_chunks(engine, like)
+    max_page = max(1, (total + int(rows_per_page) - 1) // int(rows_per_page))
+    st.caption(f"{total} item(s) — page {st.session_state['kb_m_page']} of {max_page}")
+    if st.session_state["kb_m_page"] > max_page:
+        st.session_state["kb_m_page"] = max_page
+
+    offset = (st.session_state["kb_m_page"] - 1) * int(rows_per_page)
+    rows = fetch_chunks(engine, limit=int(rows_per_page), offset=int(offset), like=like)
+
+    # Selection state
+    if "kb_m_selected" not in st.session_state:
+        st.session_state["kb_m_selected"] = set()
+
+    col_left, col_right = st.columns([2, 3])
+    with col_left:
+        sel_all_col, clr_col = st.columns(2)
+        if sel_all_col.button("Select all on page"):
+            for rid, _path, _cn, _content in rows:
+                st.session_state["kb_m_selected"].add(int(rid))
+        if clr_col.button("Clear selection on page"):
+            for rid, _path, _cn, _content in rows:
+                st.session_state["kb_m_selected"].discard(int(rid))
+
+        st.markdown("**Items**")
+        for rid, path, cname, content in rows:
+            ck = st.checkbox(f"{rid} — {Path(path).name} :: {cname}", value=(int(rid) in st.session_state["kb_m_selected"]), key=f"kbsel_{rid}")
+            if ck:
+                st.session_state["kb_m_selected"].add(int(rid))
+            else:
+                st.session_state["kb_m_selected"].discard(int(rid))
+
+        del_count = len(st.session_state["kb_m_selected"])
+        if st.button(f"Delete selected ({del_count})", type="primary", disabled=(del_count == 0)):
+            try:
+                n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
+                st.success(f"Deleted {n} item(s)")
+                st.session_state["kb_m_selected"].clear()
+                # Invalidate search cache
+                st.session_state.pop("kb_searcher", None)
+                st.session_state.pop("kb_searcher_docs_len", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Delete failed: {e}")
+
+    with col_right:
+        st.markdown("**Preview**")
+        preview_options = [(rid, f"{rid} — {Path(path).name} :: {cname}") for rid, path, cname, _ in rows]
+        default_preview = preview_options[0][0] if preview_options else None
+        prev_id = st.selectbox(
+            "Select item",
+            options=[rid for rid, _ in preview_options] if preview_options else [],
+            index=0 if preview_options else None,
+            format_func=lambda rid: next((label for _rid, label in preview_options if _rid == rid), str(rid)),
+            key="kb_m_prev_id",
+        ) if preview_options else None
+        if prev_id is not None:
+            for rid, path, cname, content in rows:
+                if rid == prev_id:
+                    st.caption(f"{path} :: {cname}")
+                    st.text_area("Content", content, height=360)
+                    break
 
 with st.sidebar:
     st.header("Settings")
