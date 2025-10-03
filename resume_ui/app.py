@@ -160,6 +160,119 @@ with home_tab:
         else:
             st.info("No results")
 
+    # Input and packaging live only on Home tab
+    st.subheader("Input")
+    uploaded_files = st.file_uploader("Upload files or ZIP", type=None, accept_multiple_files=True)
+    fallback_dir_main = st.text_input("Or enter a directory path (optional)", value="")
+
+    st.write("")
+    left, mid, right = st.columns([1,2,1])
+    with mid:
+        include_kb = st.checkbox("Include in knowledge base (stateful)", value=True)
+        start = st.button("Build context", type="primary", use_container_width=True)
+        clear = st.button("Reset form", use_container_width=True)
+
+    if clear:
+        st.session_state.pop("context_content", None)
+        st.session_state.pop("out_paths", None)
+        st.session_state.pop("selected_chunk", None)
+
+    if start:
+        effective_input_dir = None
+        if uploaded_files:
+            temp_root = Path(uploads_root) / f"session-{uuid.uuid4().hex[:8]}"
+            temp_root.mkdir(parents=True, exist_ok=True)
+            combined_dir = temp_root / "combined"
+            combined_dir.mkdir(parents=True, exist_ok=True)
+            for f in uploaded_files:
+                name = Path(f.name).name
+                if name.lower().endswith(".zip"):
+                    zip_path = temp_root / name
+                    zip_path.write_bytes(f.read())
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        zf.extractall(combined_dir)
+                else:
+                    (combined_dir / name).write_bytes(f.read())
+            effective_input_dir = str(combined_dir.resolve())
+        elif fallback_dir_main and os.path.isdir(fallback_dir_main):
+            effective_input_dir = fallback_dir_main
+        else:
+            st.error("Please upload files/ZIP or provide a valid directory path.")
+            st.stop()
+
+        Path(md_dir).mkdir(parents=True, exist_ok=True)
+        Path(Path(output_file).parent).mkdir(parents=True, exist_ok=True)
+
+        with st.spinner("Converting to Markdown..."):
+            generated_md = convert_pdfs_to_markdown(effective_input_dir, md_dir)
+            st.success(f"Converted {len(generated_md)} markdown files.")
+
+        with st.spinner("Packaging context with Repomix..."):
+            instr_path = instruction_file if (attach_instructions and instruction_file and os.path.isfile(instruction_file)) else None
+            from time import strftime
+            run_tag = strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            base = Path(output_file)
+            unique_output = base.with_name(f"{base.stem}_{run_tag}{base.suffix}")
+            out_paths = package_markdown_directory(
+                md_dir,
+                str(unique_output),
+                instruction_file=instr_path,
+                header_text=header_text,
+                max_tokens=max_tokens or None,
+                encoding_name=encoding_name,
+                predefined_md_files=[str(p) for p in generated_md],
+            )
+
+            if include_kb:
+                try:
+                    count = upsert_markdown_files([Path(p) for p in generated_md])
+                    st.success(f"Upserted {count} chunk(s) into knowledge base.")
+                    # Invalidate cached searcher so new docs are included next search
+                    st.session_state.pop("kb_searcher", None)
+                    st.session_state.pop("kb_searcher_docs_len", None)
+                except Exception as e:
+                    st.error(f"KB upsert failed: {e}")
+
+            st.success(f"Packaged {len(out_paths)} file(s)")
+            try:
+                content = Path(out_paths[0]).read_text(encoding="utf-8")
+                st.session_state["context_content"] = content
+            except Exception as e:
+                st.error(f"Failed to read output file: {e}")
+            st.session_state["out_paths"] = [str(p) for p in out_paths]
+            enc = tiktoken.get_encoding(encoding_name)
+            rows = []
+            for p in out_paths:
+                text = Path(p).read_text(encoding="utf-8")
+                tok = len(enc.encode(text))
+                rows.append((str(p), tok))
+            st.write("Generated chunks (tokens):")
+            for p, tok in rows:
+                st.write(f"{p} — tokens: {tok}")
+
+    if "out_paths" in st.session_state and st.session_state["out_paths"]:
+        st.subheader("Context preview")
+        options = [f"Part {i+1}: {Path(p).name}" for i, p in enumerate(st.session_state["out_paths"])]
+        idx = st.session_state.get("selected_chunk", 0)
+        idx = st.selectbox("Select chunk", options=list(range(len(options))), format_func=lambda i: options[i], index=min(idx, len(options)-1))
+        st.session_state["selected_chunk"] = idx
+        selected_path = st.session_state["out_paths"][idx]
+        selected_content = Path(selected_path).read_text(encoding="utf-8")
+
+        col_dl, col_cp = st.columns(2)
+        with col_dl:
+            st.download_button(
+                label=f"Download",
+                data=selected_content,
+                file_name=Path(selected_path).name,
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with col_cp:
+            render_copy_button("Copy to clipboard", selected_content, height=110)
+
+        st.text_area("Preview", selected_content, height=400)
+
 with manage_tab:
     st.subheader("Manage knowledge base")
     engine = get_engine()
