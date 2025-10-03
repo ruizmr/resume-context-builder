@@ -107,7 +107,10 @@ with st.form("kb_search_form", clear_on_submit=False):
             searcher = HybridSearcher()
             searcher.fit(docs)
             top_k = int(st.session_state.get("kb_top_k", 5))
+            min_score = float(st.session_state.get("kb_min_score", 0.0))
             results = searcher.search(st.session_state["q_top"], top_k=top_k)
+            # filter by minimum score
+            results = [r for r in results if r[1] >= min_score]
 
             if not results:
                 st.session_state["kb_results_agg"] = ""
@@ -156,10 +159,14 @@ with st.sidebar:
     header_text = st.text_input("Document header", value="Context Pack")
     max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
     encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
+    # persist settings so search uses the same caps/encoding
+    st.session_state["max_tokens_config"] = int(max_tokens or 0)
+    st.session_state["encoding_name"] = encoding_name
     # moved include_kb next to build controls below
     st.divider()
     st.caption("KB search configuration")
-    kb_top_k = st.number_input("Results to return", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
+    kb_top_k = st.number_input("Max results", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
+    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, value=0.0, step=0.01, key="kb_min_score")
 
     st.divider()
     st.caption("Instructions (optional)")
