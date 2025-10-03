@@ -27,20 +27,20 @@ class HybridSearcher:
 		if self.texts:
 			self.matrix = self.vectorizer.fit_transform(self.texts)
 
-	def search(self, query: str, top_k: int = 5) -> List[Tuple[int, float, str, str, str]]:
-		"""Return (id, score, path, chunk_name, snippet)."""
+	def search(self, query: str, top_k: int = 5) -> List[Tuple[int, float, str, str, str, str]]:
+		"""Return (id, score, path, chunk_name, snippet, full_text)."""
 		if not self.texts:
 			return []
 		q_vec = self.vectorizer.transform([query])
 		scores = cosine_similarity(q_vec, self.matrix).ravel()
 		ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
-		results: List[Tuple[int, float, str, str, str]] = []
+		results: List[Tuple[int, float, str, str, str, str]] = []
 		for idx, score in ranked:
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
 			text = self.texts[idx]
 			snippet = text[:400]
-			results.append((cid, float(score), path, cname, snippet))
+			results.append((cid, float(score), path, cname, snippet, text))
 		return results
 
 

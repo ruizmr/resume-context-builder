@@ -38,6 +38,54 @@ Path(uploads_root).mkdir(parents=True, exist_ok=True)
 if "instruction_file" not in st.session_state:
     st.session_state["instruction_file"] = default_instr
 
+# Reusable copy widget
+
+def render_copy_button(label: str, text: str, height: int = 110):
+    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    tmpl = """
+    <style>
+    .copy-wrap { position: relative; width: 100%; margin: 0.2rem 0; }
+    .copy-btn {
+      all: unset; display: inline-block; width: 100%; text-align: center;
+      padding: 0.6rem 1rem; border-radius: 0.25rem; background-color: #F63366;
+      color: #fff; cursor: pointer; font-weight: 600; box-shadow: rgba(0,0,0,0.1) 0 1px 2px;
+      transition: filter .15s ease-in-out, background-color .15s ease-in-out;
+    }
+    .copy-btn:hover { filter: brightness(0.95); }
+    .copy-btn.copied { background-color: #22c55e; }
+    .toast {
+      position: absolute; top: -2.2rem; right: 0.25rem; background: #22c55e; color: #fff;
+      padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; display: inline-flex; align-items: center;
+      gap: 6px; opacity: 0; transform: translateY(4px); transition: opacity .18s, transform .18s;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast .check { font-weight: 900; }
+    </style>
+    <script>
+    async function copyGeneric(){
+      const text = atob('{{B64}}');
+      try { await navigator.clipboard.writeText(text); } catch(e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e2) {} document.body.removeChild(ta);
+      }
+      const toast = document.getElementById('copy-toast');
+      const btn = document.getElementById('copy-btn');
+      if (btn) {
+        const original = btn.textContent;
+        btn.classList.add('copied'); btn.textContent = 'Copied!';
+        setTimeout(()=>{ btn.classList.remove('copied'); btn.textContent = original; }, 1200);
+      }
+      if (toast) { toast.classList.add('show'); setTimeout(()=> toast.classList.remove('show'), 1200); }
+    }
+    </script>
+    <div class="copy-wrap">
+      <button id="copy-btn" class="copy-btn" onclick="copyGeneric()">{{LABEL}}</button>
+      <span id="copy-toast" class="toast"><span class="check">✓</span> Copied to clipboard</span>
+    </div>
+    """
+    html = tmpl.replace("{{B64}}", b64).replace("{{LABEL}}", label)
+    components.html(html, height=height)
+
 with st.sidebar:
     st.header("Settings")
     md_dir = st.text_input("Markdown output directory", value=default_md_dir)
@@ -48,6 +96,10 @@ with st.sidebar:
     max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
     encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
     include_kb = st.checkbox("Include in knowledge base (stateful)", value=False)
+    st.divider()
+    st.caption("KB search configuration")
+    kb_top_k = st.number_input("Results to return", value=5, min_value=1, max_value=50, step=1)
+    kb_snippet_len = st.number_input("Snippet length (chars)", value=400, min_value=50, max_value=4000, step=50)
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -183,50 +235,7 @@ if "out_paths" in st.session_state and st.session_state["out_paths"]:
             use_container_width=True,
         )
     with col_cp:
-        b64 = base64.b64encode(selected_content.encode("utf-8")).decode("ascii")
-        tmpl = """
-        <style>
-        .copy-wrap { position: relative; width: 100%; }
-        .copy-btn {
-          all: unset; display: inline-block; width: 100%; text-align: center;
-          padding: 0.6rem 1rem; border-radius: 0.25rem; background-color: #F63366;
-          color: #fff; cursor: pointer; font-weight: 600; box-shadow: rgba(0,0,0,0.1) 0 1px 2px;
-          transition: filter .15s ease-in-out, background-color .15s ease-in-out;
-        }
-        .copy-btn:hover { filter: brightness(0.95); }
-        .copy-btn.copied { background-color: #22c55e; }
-        .toast {
-          position: absolute; top: -2.2rem; right: 0.25rem; background: #22c55e; color: #fff;
-          padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; display: inline-flex; align-items: center;
-          gap: 6px; opacity: 0; transform: translateY(4px); transition: opacity .18s, transform .18s;
-        }
-        .toast.show { opacity: 1; transform: translateY(0); }
-        .toast .check { font-weight: 900; }
-        </style>
-        <script>
-        async function copyChunk(){
-          const text = atob('{{B64}}');
-          try { await navigator.clipboard.writeText(text); } catch(e) {
-            const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
-            ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e2) {} document.body.removeChild(ta);
-          }
-          const toast = document.getElementById('copy-toast');
-          const btn = document.getElementById('copy-btn');
-          if (btn) {
-            const original = btn.textContent;
-            btn.classList.add('copied'); btn.textContent = 'Copied!';
-            setTimeout(()=>{ btn.classList.remove('copied'); btn.textContent = original; }, 1200);
-          }
-          if (toast) { toast.classList.add('show'); setTimeout(()=> toast.classList.remove('show'), 1200); }
-        }
-        </script>
-        <div class="copy-wrap">
-          <button id="copy-btn" class="copy-btn" onclick="copyChunk()">Copy to clipboard</button>
-          <span id="copy-toast" class="toast"><span class="check">✓</span> Copied to clipboard</span>
-        </div>
-        """
-        html = tmpl.replace("{{B64}}", b64)
-        components.html(html, height=110)
+        render_copy_button("Copy to clipboard", selected_content, height=110)
 
     st.text_area("Preview", selected_content, height=400)
 
@@ -238,13 +247,15 @@ if st.button("Search KB"):
         docs = fetch_all_chunks(engine)
         searcher = HybridSearcher()
         searcher.fit(docs)
-        results = searcher.search(q, top_k=5)
+        results = searcher.search(q, top_k=int(kb_top_k))
         if not results:
             st.info("No results")
         else:
-            for cid, score, path, cname, snippet in results:
+            for cid, score, path, cname, snippet, full_text in results:
                 st.markdown(f"**{path} :: {cname}** — score {score:.3f}")
-                st.code(snippet)
+                st.caption("Lineage: original file path and chunk name shown above.")
+                st.code(snippet[: int(kb_snippet_len)])
+                render_copy_button("Copy this chunk", full_text, height=80)
     except Exception as e:
         st.error(f"Search failed: {e}")
 
