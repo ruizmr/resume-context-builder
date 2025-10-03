@@ -163,7 +163,7 @@ with home_tab:
     # Input and packaging live only on Home tab
     st.subheader("Input")
     uploaded_files = st.file_uploader("Upload files or ZIP", type=None, accept_multiple_files=True, key="home_file_uploader")
-    fallback_dir_main = st.text_input("Or enter a directory path (optional)", value="")
+    fallback_dir_main = st.text_input("Or enter a directory path (optional)", value="", key="home_fallback_dir")
 
     st.write("")
     left, mid, right = st.columns([1,2,1])
