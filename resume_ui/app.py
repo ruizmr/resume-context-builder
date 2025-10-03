@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from hr_tools.package_context import package_markdown_directory
 from kb.upsert import upsert_markdown_files
-from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids
+from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id
 from kb.search import HybridSearcher
 
 
@@ -86,8 +86,12 @@ def render_copy_button(label: str, text: str, height: int = 110):
     html = tmpl.replace("{{B64}}", b64).replace("{{LABEL}}", label)
     components.html(html, height=height)
 
-# Global search bar pinned at top (independent form)
-with st.form("kb_search_form", clear_on_submit=False):
+# Tabs
+home_tab, manage_tab = st.tabs(["Home", "Manage knowledge"])
+
+with home_tab:
+    # Global search bar pinned at top (independent form)
+    with st.form("kb_search_form", clear_on_submit=False):
     top_cols = st.columns([8, 1])
     with top_cols[0]:
         st.text_input(
@@ -147,18 +151,16 @@ with st.form("kb_search_form", clear_on_submit=False):
             st.session_state["kb_results_list"] = []
             st.error(f"Search failed: {e}")
 
-# Always render last search results if present (no refresh required)
-if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] is not None:
-    if st.session_state["kb_results_agg"]:
-        st.subheader("Search results")
-        render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
-        st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
-    else:
-        st.info("No results")
+    # Always render last search results if present (no refresh required)
+    if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] is not None:
+        if st.session_state["kb_results_agg"]:
+            st.subheader("Search results")
+            render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
+            st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
+        else:
+            st.info("No results")
 
-# Manage Knowledge Tab
-manage_tabs = st.tabs(["Manage knowledge"])
-with manage_tabs[0]:
+with manage_tab:
     st.subheader("Manage knowledge base")
     engine = get_engine()
 
@@ -186,56 +188,57 @@ with manage_tabs[0]:
 
     # Selection state
     if "kb_m_selected" not in st.session_state:
-        st.session_state["kb_m_selected"] = set()
+        st.session_state["kb_m_selected"] = []
 
-    col_left, col_right = st.columns([2, 3])
-    with col_left:
-        sel_all_col, clr_col = st.columns(2)
-        if sel_all_col.button("Select all on page"):
-            for rid, _path, _cn, _content in rows:
-                st.session_state["kb_m_selected"].add(int(rid))
-        if clr_col.button("Clear selection on page"):
-            for rid, _path, _cn, _content in rows:
-                st.session_state["kb_m_selected"].discard(int(rid))
+    # Build dropdown options for this page (id -> label)
+    page_options = [(rid, f"{rid} — {Path(path).name} :: {cname}") for rid, path, cname, _ in rows]
+    option_labels = {rid: label for rid, label in page_options}
 
-        st.markdown("**Items**")
-        for rid, path, cname, content in rows:
-            ck = st.checkbox(f"{rid} — {Path(path).name} :: {cname}", value=(int(rid) in st.session_state["kb_m_selected"]), key=f"kbsel_{rid}")
-            if ck:
-                st.session_state["kb_m_selected"].add(int(rid))
-            else:
-                st.session_state["kb_m_selected"].discard(int(rid))
+    # Searchable multiselect (limited to current page for performance)
+    selected_ids = st.multiselect(
+        "Select items (current page)",
+        options=[rid for rid, _ in page_options],
+        default=[rid for rid in st.session_state["kb_m_selected"] if any(rid == rid2 for rid2, _ in page_options)],
+        format_func=lambda rid: option_labels.get(rid, str(rid)),
+        key="kb_m_multi",
+    )
+    st.session_state["kb_m_selected"] = list(selected_ids)
 
-        del_count = len(st.session_state["kb_m_selected"])
-        if st.button(f"Delete selected ({del_count})", type="primary", disabled=(del_count == 0)):
-            try:
-                n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
-                st.success(f"Deleted {n} item(s)")
-                st.session_state["kb_m_selected"].clear()
-                # Invalidate search cache
-                st.session_state.pop("kb_searcher", None)
-                st.session_state.pop("kb_searcher_docs_len", None)
+    # Auto preview first selected, with prev/next controls if multiple
+    if st.session_state["kb_m_selected"]:
+        sel_ids = st.session_state["kb_m_selected"]
+        idx = st.session_state.get("kb_m_prev_idx", 0)
+        idx = max(0, min(idx, len(sel_ids) - 1))
+        cols_nav = st.columns([1, 3, 1])
+        with cols_nav[0]:
+            if st.button("◀ Prev", disabled=(idx <= 0)):
+                st.session_state["kb_m_prev_idx"] = max(0, idx - 1)
                 st.rerun()
-            except Exception as e:
-                st.error(f"Delete failed: {e}")
+        with cols_nav[2]:
+            if st.button("Next ▶", disabled=(idx >= len(sel_ids) - 1)):
+                st.session_state["kb_m_prev_idx"] = min(len(sel_ids) - 1, idx + 1)
+                st.rerun()
 
-    with col_right:
-        st.markdown("**Preview**")
-        preview_options = [(rid, f"{rid} — {Path(path).name} :: {cname}") for rid, path, cname, _ in rows]
-        default_preview = preview_options[0][0] if preview_options else None
-        prev_id = st.selectbox(
-            "Select item",
-            options=[rid for rid, _ in preview_options] if preview_options else [],
-            index=0 if preview_options else None,
-            format_func=lambda rid: next((label for _rid, label in preview_options if _rid == rid), str(rid)),
-            key="kb_m_prev_id",
-        ) if preview_options else None
-        if prev_id is not None:
-            for rid, path, cname, content in rows:
-                if rid == prev_id:
-                    st.caption(f"{path} :: {cname}")
-                    st.text_area("Content", content, height=360)
-                    break
+        current_id = sel_ids[idx]
+        row = fetch_chunk_by_id(engine, int(current_id))
+        if row:
+            _rid, path, cname, content = row
+            st.caption(f"{path} :: {cname}")
+            st.text_area("Content", content, height=360)
+
+    del_count = len(st.session_state["kb_m_selected"])
+    if st.button(f"Delete selected ({del_count})", type="primary", disabled=(del_count == 0)):
+        try:
+            n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
+            st.success(f"Deleted {n} item(s)")
+            st.session_state["kb_m_selected"] = []
+            st.session_state.pop("kb_m_prev_idx", None)
+            # Invalidate search cache
+            st.session_state.pop("kb_searcher", None)
+            st.session_state.pop("kb_searcher_docs_len", None)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Delete failed: {e}")
 
 with st.sidebar:
     st.header("Settings")

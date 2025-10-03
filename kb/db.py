@@ -143,4 +143,10 @@ def delete_chunks_by_ids(engine: Engine, ids: List[int]) -> int:
 		except Exception:
 			return 0
 
+def fetch_chunk_by_id(engine: Engine, chunk_id: int) -> Tuple[int, str, str, str] | None:
+	"""Fetch a single chunk by id."""
+	with engine.begin() as conn:
+		row = conn.execute(text("SELECT id, path, chunk_name, content FROM chunks WHERE id=:id"), {"id": int(chunk_id)}).fetchone()
+		return (row[0], row[1], row[2], row[3]) if row else None
+
 
