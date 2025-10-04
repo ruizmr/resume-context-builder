@@ -8,13 +8,13 @@ Convert documents to Markdown (MarkItDown), package into a single LLM-ready cont
 
 ### macOS/Linux (full extras)
 ```bash
-sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui'
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from "git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full" resume-ui'
 ```
 
 
 ### Windows (full extras)
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command uv -EA SilentlyContinue)) { iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex }; $env:Path = \"$env:USERPROFILE\.local\bin;$env:Path\"; uvx --python 3.12 --refresh --from 'git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full' resume-ui"
 ```
 
 Use the sidebar to upload files or point to a folder. Download/copy packaged chunks. Check "Include in knowledge base" to persist chunks and use the built-in search.
@@ -58,15 +58,27 @@ context-ingest "/path/to/input_dir" "/path/to/markdown_out_dir"
 
 # Upsert existing Markdown into KB
 context-upsert "/path/to/markdown_out_dir"
+
+# Scheduler (persistent)
+# Add a job that ingests every hour
+context-scheduler add hourly_ingest "/path/to/input_dir" --md-out "/path/to/markdown_out_dir" --interval 60
+# Or cron syntax
+context-scheduler add nightly_ingest "/path/to/input_dir" --md-out "/path/to/markdown_out_dir" --cron "0 2 * * *"
+# List jobs
+context-scheduler list
+# Remove job
+context-scheduler remove hourly_ingest
+# Start scheduler (blocking)
+context-scheduler start
 ```
 
 One-shot (no install):
 ```bash
 # UI
-sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full resume-ui'
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from "git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full" resume-ui'
 
 # Ingest (convert + upsert)
-sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from git+https://github.com/ruizmr/resume-context-builder.git?extra=full context-ingest "/path/to/input_dir" "/path/to/markdown_out_dir"'
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from "git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full" context-ingest "/path/to/input_dir" "/path/to/markdown_out_dir"'
 ```
 
 Database configuration:
@@ -95,4 +107,19 @@ source "$HOME/.local/bin/env" || { echo 'export PATH="$HOME/.local/bin:$PATH"' >
 - Windows PowerShell:
 ```powershell
 & "$env:USERPROFILE\.local\bin\resume-ui.exe"
+```
+
+## 4. Reset/nuke cached install (uv)
+
+If you’re not seeing the latest UI changes:
+
+```bash
+# Remove cached venvs and archives
+uv cache prune
+
+# Remove previously installed tool shim (optional)
+uv tool uninstall resume-ui || true
+
+# Reinstall and pin to main
+sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from "git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full" resume-ui'
 ```

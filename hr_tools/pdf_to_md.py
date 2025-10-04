@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Callable, Optional
 
 # Optional dependency: prefer MarkItDown when available
 try:
@@ -62,6 +62,8 @@ def convert_documents_to_markdown(
 	output_dir: str | Path,
 	*,
 	write_index: bool = True,
+	progress_cb: Optional[Callable[[int, int, Path], None]] = None,
+	timing_cb: Optional[Callable[[Path, float], None]] = None,
 ) -> List[Path]:
 	"""Convert all supported files under input_dir to Markdown under output_dir, mirroring structure.
 
@@ -75,11 +77,26 @@ def convert_documents_to_markdown(
 	md_client = MarkItDown(enable_builtins=True, enable_plugins=False) if HAS_MARKITDOWN else None
 	generated: List[Path] = []
 
-	for src in find_input_files(input_root):
+	files = find_input_files(input_root)
+	total = len(files)
+	for idx, src in enumerate(files):
 		rel = src.relative_to(input_root)
 		md_path = output_root / rel.with_suffix(".md")
 		try:
+			if progress_cb is not None:
+				try:
+					progress_cb(idx + 1, total, src)
+				except Exception:
+					pass
+			import time as _t
+			_t0 = _t.perf_counter()
 			convert_file_to_markdown(src, md_path, md_client)
+			_dt = _t.perf_counter() - _t0
+			if timing_cb is not None:
+				try:
+					timing_cb(src, _dt)
+				except Exception:
+					pass
 			generated.append(md_path)
 		except Exception as e:
 			print(f"[warn] Failed to convert {src}: {e}", file=sys.stderr)
@@ -102,9 +119,17 @@ def convert_pdfs_to_markdown(
 	output_dir: str | Path,
 	*,
 	write_index: bool = True,
+	progress_cb: Optional[Callable[[int, int, Path], None]] = None,
+	timing_cb: Optional[Callable[[Path, float], None]] = None,
 ) -> List[Path]:
 	"""Backward compatible wrapper: converts any supported files under input_dir to Markdown."""
-	return convert_documents_to_markdown(input_dir, output_dir, write_index=write_index)
+	return convert_documents_to_markdown(
+		input_dir,
+		output_dir,
+		write_index=write_index,
+		progress_cb=progress_cb,
+		timing_cb=timing_cb,
+	)
 
 
 if __name__ == "__main__":

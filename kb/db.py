@@ -59,6 +59,18 @@ def init_schema(engine: Engine) -> None:
 				"""
 			)
 		)
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS file_index (
+                    path TEXT PRIMARY KEY,
+                    sha256 TEXT,
+                    params_sig TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+        )
 
 
 def compute_hash(content: str) -> str:
@@ -89,6 +101,43 @@ def upsert_chunks(engine: Engine, records: List[Tuple[str, str, str]]):
 				{"path": path, "chunk_name": chunk_name, "hash": h, "content": content, "now": now},
 			)
 
+
+def get_file_index(engine: Engine, path: str) -> Tuple[str, str] | None:
+    """Return (sha256, params_sig) for a path if recorded."""
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT sha256, params_sig FROM file_index WHERE path=:p"), {"p": path}
+        ).fetchone()
+        return (row[0], row[1]) if row else None
+
+
+def upsert_file_index(engine: Engine, path: str, sha256: str, params_sig: str | None) -> None:
+    from datetime import datetime
+    now = datetime.utcnow().isoformat()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO file_index(path, sha256, params_sig, updated_at)
+                VALUES(:path, :sha, :psig, :now)
+                ON CONFLICT(path) DO UPDATE SET
+                    sha256=excluded.sha256,
+                    params_sig=excluded.params_sig,
+                    updated_at=excluded.updated_at
+                """
+            ),
+            {"path": path, "sha": sha256, "psig": params_sig, "now": now},
+        )
+
+
+def delete_chunks_by_path(engine: Engine, path: str) -> int:
+    """Delete all chunks that belong to a specific file path."""
+    with engine.begin() as conn:
+        res = conn.execute(text("DELETE FROM chunks WHERE path=:p"), {"p": path})
+        try:
+            return int(res.rowcount)  # type: ignore[attr-defined]
+        except Exception:
+            return 0
 
 def fetch_all_chunks(engine: Engine) -> List[Tuple[int, str, str, str]]:
 	"""Return list of (id, path, chunk_name, content)."""

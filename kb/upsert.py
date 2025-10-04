@@ -4,7 +4,7 @@ from typing import List, Tuple, Optional
 import re
 import tiktoken
 
-from kb.db import get_engine, upsert_chunks
+from kb.db import get_engine, upsert_chunks, get_file_index, upsert_file_index, delete_chunks_by_path
 
 
 def _find_prev_boundary(text: str, approx_char_idx: int, window: int = 500) -> int:
@@ -67,7 +67,18 @@ def upsert_markdown_files(
 	records: List[Tuple[str, str, str]] = []
 	for md in md_files:
 		try:
-			content = md.read_text(encoding="utf-8")
+            content = md.read_text(encoding="utf-8")
+            # Compute file-level hash and params signature to skip unchanged
+            import hashlib
+            file_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            params_sig = f"t={max_tokens_per_chunk}|o={overlap_tokens}|e={encoding_name}"
+            prev = get_file_index(engine, str(md))
+            if prev and prev[0] == file_sha and prev[1] == params_sig:
+                # Unchanged for current settings: skip recompute/upsert
+                continue
+            else:
+                # Content changed or settings changed: remove old chunks for this file (idempotent) and re-upsert
+                delete_chunks_by_path(engine, str(md))
 			if max_tokens_per_chunk and max_tokens_per_chunk > 0:
 				chunks = slice_text_tokens(
 					content,
@@ -80,6 +91,8 @@ def upsert_markdown_files(
 				chunks = [content]
 			for i, ch in enumerate(chunks):
 				records.append((str(md), f"part{i+1}", ch))
+            # Record file hash and params
+            upsert_file_index(engine, str(md), file_sha, params_sig)
 		except Exception:
 			continue
 	if records:

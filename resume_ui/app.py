@@ -1,6 +1,7 @@
 import os
 import base64
 import zipfile
+import json
 import uuid
 from pathlib import Path
 import importlib.resources as resources
@@ -12,7 +13,7 @@ import streamlit.components.v1 as components
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from hr_tools.package_context import package_markdown_directory
 from kb.upsert import upsert_markdown_files
-from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id
+from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id, STATE_DIR, get_database_url
 from kb.search import HybridSearcher
 
 
@@ -35,6 +36,44 @@ uploads_root = str(Path.home() / ".context-packager-uploads")
 Path(uploads_root).mkdir(parents=True, exist_ok=True)
 
 
+# Persistent settings
+SETTINGS_FILE = STATE_DIR / "settings.json"
+PERSIST_KEYS = [
+    "md_dir",
+    "output_file",
+    "attach_instructions",
+    "instruction_file",
+    "header_text",
+    "max_tokens",
+    "encoding_name",
+    "kb_top_k",
+    "kb_min_score",
+]
+
+
+def _load_saved_settings() -> dict:
+    try:
+        if SETTINGS_FILE.exists():
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_settings(payload: dict) -> None:
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        raise e
+
+
+# Load persisted settings into session (first run only)
+_saved = _load_saved_settings()
+for _k in PERSIST_KEYS:
+    if _k in _saved and _k not in st.session_state:
+        st.session_state[_k] = _saved[_k]
+
 if "instruction_file" not in st.session_state:
     st.session_state["instruction_file"] = default_instr
 
@@ -42,21 +81,66 @@ if "instruction_file" not in st.session_state:
 
 with st.sidebar:
     st.header("Settings")
-    md_dir = st.text_input("Markdown output directory", value=default_md_dir)
-    output_file = st.text_input("Context output file", value=default_out_file)
-    attach_instructions = st.checkbox("Attach instructions", value=True)
-    instruction_file = st.text_input("Instructions file (Markdown)", value=st.session_state.get("instruction_file", default_instr))
-    header_text = st.text_input("Document header", value="Context Pack")
-    max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
-    encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
+    md_dir = st.text_input(
+        "Markdown output directory",
+        value=st.session_state.get("md_dir", default_md_dir),
+        key="md_dir",
+    )
+    output_file = st.text_input(
+        "Context output file",
+        value=st.session_state.get("output_file", default_out_file),
+        key="output_file",
+    )
+    attach_instructions = st.checkbox(
+        "Attach instructions",
+        value=bool(st.session_state.get("attach_instructions", True)),
+        key="attach_instructions",
+    )
+    instruction_file = st.text_input(
+        "Instructions file (Markdown)",
+        value=st.session_state.get("instruction_file", default_instr),
+        key="instruction_file",
+    )
+    header_text = st.text_input(
+        "Document header",
+        value=st.session_state.get("header_text", "Context Pack"),
+        key="header_text",
+    )
+    max_tokens = st.number_input(
+        "Max tokens per chunk (0 = no split)",
+        value=int(st.session_state.get("max_tokens", 120000)),
+        min_value=0,
+        step=1000,
+        key="max_tokens",
+    )
+    encoding_name = st.selectbox(
+        "Tokenizer",
+        options=["o200k_base", "cl100k_base"],
+        index=(0 if st.session_state.get("encoding_name", "o200k_base") == "o200k_base" else 1),
+        key="encoding_name",
+    )
     # persist settings so search uses the same caps/encoding
     st.session_state["max_tokens_config"] = int(max_tokens or 0)
     st.session_state["encoding_name"] = encoding_name
     # moved include_kb next to build controls below
     st.divider()
     st.caption("KB search configuration")
-    kb_top_k = st.number_input("Max results", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
-    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, value=0.0, step=0.01, key="kb_min_score")
+    kb_top_k = st.number_input(
+        "Max results",
+        value=int(st.session_state.get("kb_top_k", 5)),
+        min_value=1,
+        max_value=50,
+        step=1,
+        key="kb_top_k",
+    )
+    kb_min_score = st.slider(
+        "Minimum score",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(st.session_state.get("kb_min_score", 0.0)),
+        step=0.01,
+        key="kb_min_score",
+    )
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -87,6 +171,15 @@ with st.sidebar:
 
     if st.button("Edit instructions", use_container_width=True):
         edit_instructions_dialog()
+
+    st.divider()
+    if st.button("Save settings", use_container_width=True):
+        try:
+            payload = {k: st.session_state.get(k) for k in PERSIST_KEYS}
+            _save_settings(payload)
+            st.success("Settings saved")
+        except Exception as e:
+            st.error(f"Failed to save settings: {e}")
 
 def render_copy_button(label: str, text: str, height: int = 110):
     b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
@@ -252,7 +345,25 @@ with home_tab:
         Path(Path(output_file).parent).mkdir(parents=True, exist_ok=True)
 
         with st.spinner("Converting to Markdown..."):
-            generated_md = convert_pdfs_to_markdown(effective_input_dir, md_dir)
+            prog = st.progress(0, text="Scanning files…")
+            last_file = st.empty()
+            slow_log: list[tuple[str, float]] = []
+            def _progress(i: int, total: int, p: Path):
+                prog.progress(min(100, int(i * 100 / max(1, total))), text=f"{i}/{total}: {p.name}")
+                last_file.write(f"Processing: {p}")
+            def _timing(p: Path, dt: float):
+                slow_log.append((str(p), dt))
+            generated_md = convert_pdfs_to_markdown(
+                effective_input_dir,
+                md_dir,
+                progress_cb=_progress,
+                timing_cb=_timing,
+            )
+            if slow_log:
+                slow_log.sort(key=lambda x: x[1], reverse=True)
+                top = "\n".join([f"{Path(p).name} — {t:.2f}s" for p, t in slow_log[:5]])
+                st.caption("Slowest files:")
+                st.text(top)
             st.success(f"Converted {len(generated_md)} markdown files.")
 
         with st.spinner("Packaging context with Repomix..."):
@@ -324,6 +435,127 @@ with home_tab:
 with manage_tab:
     st.subheader("Manage knowledge base")
     engine = get_engine()
+    st.divider()
+    st.subheader("Enable continuous folder sync")
+
+    # Scheduler controls (uses same DB via SQLAlchemy job store)
+    col_a, col_b = st.columns([3, 2])
+    with col_a:
+        sync_folder = st.text_input("Folder to sync", value=st.session_state.get("sync_folder", ""), key="sync_folder", placeholder="/path/to/folder")
+        md_out_target = st.text_input("Markdown output dir (optional)", value=st.session_state.get("sync_md_out", st.session_state.get("md_dir", default_md_dir)), key="sync_md_out")
+    with col_b:
+        schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Cron"], index=0, key="sync_mode")
+        interval_minutes = 1440 if schedule_mode == "Daily" else int(st.number_input("Interval (minutes)", value=int(st.session_state.get("sync_interval", 60)), min_value=1, step=1, key="sync_interval"))
+        cron_expr = st.text_input("Cron (min hr dom mon dow)", value=st.session_state.get("sync_cron", "0 2 * * *"), key="sync_cron")
+
+    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns([1,1,1,1])
+    with col_btn1:
+        start_sync = st.button("Start", use_container_width=True)
+    with col_btn2:
+        stop_sync = st.button("Stop", use_container_width=True)
+    with col_btn3:
+        list_sync = st.button("List jobs", use_container_width=True)
+    with col_btn4:
+        remove_sync = st.button("Remove job", use_container_width=True)
+
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.executors.pool import ThreadPoolExecutor
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+    from apscheduler.triggers.interval import IntervalTrigger
+    from apscheduler.triggers.cron import CronTrigger
+    from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
+
+    def _get_scheduler():
+        jobstores = {'default': SQLAlchemyJobStore(url=get_database_url())}
+        executors = {'default': ThreadPoolExecutor(4)}
+        job_defaults = {'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 300}
+        return BackgroundScheduler(jobstores=jobstores, executors=executors, job_defaults=job_defaults)
+
+    def _ensure_sched_started():
+        if "ui_scheduler" not in st.session_state:
+            st.session_state["ui_scheduler"] = _get_scheduler()
+            st.session_state["ui_scheduler"].start()
+
+    job_id = "ui_continuous_sync"
+    if start_sync:
+        try:
+            _ensure_sched_started()
+            sched = st.session_state["ui_scheduler"]
+            trigger = None
+            if schedule_mode == "Daily":
+                trigger = CronTrigger.from_crontab("0 2 * * *")
+            elif schedule_mode == "Every X minutes":
+                trigger = IntervalTrigger(minutes=int(interval_minutes))
+            else:
+                trigger = CronTrigger.from_crontab(cron_expr)
+            in_dir = sync_folder.strip()
+            if not in_dir:
+                st.error("Please provide a folder to sync")
+            else:
+                sched.add_job(_job_ingest_fn, id=job_id, args=[in_dir, md_out_target or None], trigger=trigger, replace_existing=True)
+                st.success("Continuous sync enabled")
+        except Exception as e:
+            st.error(f"Failed to start: {e}")
+
+    if stop_sync:
+        try:
+            if "ui_scheduler" in st.session_state:
+                sched = st.session_state["ui_scheduler"]
+                try:
+                    sched.remove_job(job_id)
+                except Exception:
+                    pass
+                st.success("Continuous sync stopped")
+        except Exception as e:
+            st.error(f"Failed to stop: {e}")
+
+    if list_sync:
+        try:
+            _ensure_sched_started()
+            sched = st.session_state["ui_scheduler"]
+            jobs = sched.get_jobs()
+            if not jobs:
+                st.info("No scheduled jobs")
+            else:
+                for j in jobs:
+                    st.caption(f"{j.id}: {j.trigger} next={j.next_run_time}")
+        except Exception as e:
+            st.error(f"Failed to list jobs: {e}")
+
+    if remove_sync:
+        try:
+            _ensure_sched_started()
+            sched = st.session_state["ui_scheduler"]
+            try:
+                sched.remove_job(job_id)
+                st.success("Removed scheduled job")
+            except Exception as e:
+                st.error(f"Failed to remove: {e}")
+        except Exception as e:
+            st.error(f"Failed to remove: {e}")
+
+    st.divider()
+
+    def _friendly_title(path: str, chunk_name: str, content: str) -> str:
+        # Prefer first Markdown heading if present
+        try:
+            for line in content.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    return s[2:].strip()
+                if s.startswith("## "):
+                    return s[3:].strip()
+                if s and not s.startswith("#") and len(s) > 8:
+                    # fallback: first non-empty line with some length
+                    return s[:80]
+        except Exception:
+            pass
+        # Fallback to filename without noisy tokens
+        name = Path(path).name
+        base = name.rsplit(".", 1)[0]
+        cleaned = base.replace("_", " ").replace("-", " ")
+        cleaned = " ".join(part for part in cleaned.split() if not part.isupper() or len(part) <= 5)
+        return cleaned.strip() or chunk_name or name
 
     # Controls
     colf, colp, colr = st.columns([4, 1, 1])
@@ -352,7 +584,11 @@ with manage_tab:
         st.session_state["kb_m_selected"] = []
 
     # Build dropdown options for this page (id -> label)
-    page_options = [(rid, f"{rid} — {Path(path).name} :: {cname}") for rid, path, cname, _ in rows]
+    page_options = []
+    for rid, path, cname, content in rows:
+        title = _friendly_title(path, cname, content)
+        label = f"{title} — {Path(path).name} :: {cname}"
+        page_options.append((rid, label))
     option_labels = {rid: label for rid, label in page_options}
 
     # Searchable multiselect (limited to current page for performance)

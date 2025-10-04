@@ -19,6 +19,7 @@ dependencies = [
   "scikit-learn==1.5.2",
   "psycopg[binary,pool]==3.2.1",
   "hnswlib==0.8.0",
+  "APScheduler==3.10.4",
 ]
 
 [project.urls]
@@ -29,6 +30,7 @@ context-ui = "resume_ui.cli:main"
 resume-ui = "resume_ui.cli:main"
 context-upsert = "resume_ui.upsert_cli:main"
 context-ingest = "resume_ui.ingest_cli:main"
+context-scheduler = "resume_ui.scheduler_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["resume_ui", "hr_tools", "kb"]
