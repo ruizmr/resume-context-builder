@@ -745,11 +745,14 @@ with manage_tab:
     st.caption("Factory reset DB: wipes jobs and KB tables. This cannot be undone.")
     with st.form("factory_reset_form", clear_on_submit=False):
         confirm = st.text_input("Type RESET to confirm", key="factory_reset_confirm")
-        do_reset = st.form_submit_button("Factory reset DB", disabled=(confirm.strip().upper() != "RESET"))
+        do_reset = st.form_submit_button("Factory reset DB")
     if do_reset:
-        try:
-            from kb.db import factory_reset_db
-            factory_reset_db()
-            st.success("Database reset complete")
-        except Exception as e:
-            st.error(f"Reset failed: {e}")
+        if (st.session_state.get("factory_reset_confirm", "").strip().upper() != "RESET"):
+            st.error("Please type RESET to confirm.")
+        else:
+            try:
+                from kb.db import factory_reset_db
+                factory_reset_db()
+                st.success("Database reset complete")
+            except Exception as e:
+                st.error(f"Reset failed: {e}")
