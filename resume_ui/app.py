@@ -5,6 +5,7 @@ import json
 import uuid
 from pathlib import Path
 import importlib.resources as resources
+from datetime import time as dt_time
 
 import streamlit as st
 import tiktoken
@@ -125,6 +126,7 @@ with st.sidebar:
     st.session_state["max_tokens_config"] = int(max_tokens or 0)
     # moved include_kb next to build controls below
     st.divider()
+    st.subheader("Edit and delete knowledge")
     st.caption("KB search configuration")
     kb_top_k = st.number_input(
         "Max results",
@@ -458,14 +460,87 @@ with manage_tab:
     st.subheader("Enable continuous folder sync")
 
     # Scheduler controls (uses same DB via SQLAlchemy job store)
+    @st.dialog("Choose folder to sync")
+    def _choose_sync_folder_dialog():
+        try:
+            cwd_str = st.session_state.get("sync_browser_cwd", str(Path.home()))
+            cwd = Path(cwd_str).expanduser().resolve()
+        except Exception:
+            cwd = Path.home()
+            st.session_state["sync_browser_cwd"] = str(cwd)
+        st.caption(f"Current: {cwd}")
+        cols = st.columns([1, 1, 1])
+        with cols[0]:
+            if st.button("Select this folder", use_container_width=True):
+                st.session_state["sync_folder"] = str(cwd)
+                st.success(f"Selected: {cwd}")
+                st.rerun()
+        with cols[1]:
+            if st.button("Up", use_container_width=True, disabled=(cwd.parent == cwd)):
+                st.session_state["sync_browser_cwd"] = str(cwd.parent)
+                st.rerun()
+        st.divider()
+        try:
+            dirs = [p for p in cwd.iterdir() if p.is_dir()]
+            dirs.sort(key=lambda p: p.name.lower())
+        except Exception:
+            dirs = []
+        for d in dirs:
+            if st.button(d.name + "/", key=f"sync_browse_{d}"):
+                st.session_state["sync_browser_cwd"] = str(d)
+                st.rerun()
+
+    @st.dialog("Choose Markdown output directory")
+    def _choose_md_out_dialog():
+        try:
+            cwd_str = st.session_state.get("sync_md_browser_cwd", str(Path.home()))
+            cwd = Path(cwd_str).expanduser().resolve()
+        except Exception:
+            cwd = Path.home()
+            st.session_state["sync_md_browser_cwd"] = str(cwd)
+        st.caption(f"Current: {cwd}")
+        cols = st.columns([1, 1, 1])
+        with cols[0]:
+            if st.button("Select this folder", use_container_width=True):
+                st.session_state["sync_md_out"] = str(cwd)
+                st.success(f"Selected: {cwd}")
+                st.rerun()
+        with cols[1]:
+            if st.button("Up", use_container_width=True, disabled=(cwd.parent == cwd)):
+                st.session_state["sync_md_browser_cwd"] = str(cwd.parent)
+                st.rerun()
+        st.divider()
+        try:
+            dirs = [p for p in cwd.iterdir() if p.is_dir()]
+            dirs.sort(key=lambda p: p.name.lower())
+        except Exception:
+            dirs = []
+        for d in dirs:
+            if st.button(d.name + "/", key=f"md_browse_{d}"):
+                st.session_state["sync_md_browser_cwd"] = str(d)
+                st.rerun()
+
     col_a, col_b = st.columns([3, 2])
     with col_a:
         sync_folder = st.text_input("Folder to sync", value=st.session_state.get("sync_folder", ""), key="sync_folder", placeholder="/path/to/folder")
+        if st.button("Browse…", key="browse_sync_folder"):
+            _choose_sync_folder_dialog()
         md_out_target = st.text_input("Markdown output dir (optional)", value=st.session_state.get("sync_md_out", st.session_state.get("md_dir", default_md_dir)), key="sync_md_out")
+        if st.button("Browse…", key="browse_md_out"):
+            _choose_md_out_dialog()
     with col_b:
-        schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Cron"], index=0, key="sync_mode")
-        interval_minutes = 1440 if schedule_mode == "Daily" else int(st.number_input("Interval (minutes)", value=int(st.session_state.get("sync_interval", 60)), min_value=1, step=1, key="sync_interval"))
-        cron_expr = st.text_input("Cron (min hr dom mon dow)", value=st.session_state.get("sync_cron", "0 2 * * *"), key="sync_cron")
+        schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Weekly", "Monthly", "Cron (advanced)"], index=0, key="sync_mode")
+        interval_minutes = int(st.number_input("Interval (minutes)", value=int(st.session_state.get("sync_interval", 60)), min_value=1, step=1, key="sync_interval")) if schedule_mode == "Every X minutes" else 1440
+        cron_expr = st.text_input("Cron (min hr dom mon dow)", value=st.session_state.get("sync_cron", "0 2 * * *"), key="sync_cron") if schedule_mode == "Cron (advanced)" else st.session_state.get("sync_cron", "0 2 * * *")
+        if schedule_mode == "Daily":
+            st.session_state["sync_time"] = st.time_input("Time of day", value=st.session_state.get("sync_time", dt_time(2, 0)), key="sync_time")
+        elif schedule_mode == "Weekly":
+            days_options = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            st.session_state["sync_weekdays"] = st.multiselect("Days of week", options=days_options, default=st.session_state.get("sync_weekdays", ["Mon"]), key="sync_weekdays")
+            st.session_state["sync_time_weekly"] = st.time_input("Time of day", value=st.session_state.get("sync_time_weekly", dt_time(2, 0)), key="sync_time_weekly")
+        elif schedule_mode == "Monthly":
+            st.session_state["sync_dom"] = int(st.number_input("Day of month", min_value=1, max_value=31, value=int(st.session_state.get("sync_dom", 1)), step=1, key="sync_dom"))
+            st.session_state["sync_time_monthly"] = st.time_input("Time of day", value=st.session_state.get("sync_time_monthly", dt_time(2, 0)), key="sync_time_monthly")
 
     col_btn1, col_btn2, col_btn3, col_btn4 = st.columns([1,1,1,1])
     with col_btn1:
@@ -502,11 +577,22 @@ with manage_tab:
             sched = st.session_state["ui_scheduler"]
             trigger = None
             if schedule_mode == "Daily":
-                trigger = CronTrigger.from_crontab("0 2 * * *")
+                t = st.session_state.get("sync_time", dt_time(2, 0))
+                trigger = CronTrigger(hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+            elif schedule_mode == "Weekly":
+                t = st.session_state.get("sync_time_weekly", dt_time(2, 0))
+                days = st.session_state.get("sync_weekdays", ["Mon"]) or ["Mon"]
+                dow_map = {"Mon": "mon", "Tue": "tue", "Wed": "wed", "Thu": "thu", "Fri": "fri", "Sat": "sat", "Sun": "sun"}
+                day_str = ",".join([dow_map.get(d, "mon") for d in days])
+                trigger = CronTrigger(day_of_week=day_str, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+            elif schedule_mode == "Monthly":
+                t = st.session_state.get("sync_time_monthly", dt_time(2, 0))
+                dom = int(st.session_state.get("sync_dom", 1))
+                trigger = CronTrigger(day=dom, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
             elif schedule_mode == "Every X minutes":
                 trigger = IntervalTrigger(minutes=int(interval_minutes))
             else:
-                trigger = CronTrigger.from_crontab(cron_expr)
+                trigger = CronTrigger.from_crontab(str(cron_expr))
             in_dir = sync_folder.strip()
             if not in_dir:
                 st.error("Please provide a folder to sync")
