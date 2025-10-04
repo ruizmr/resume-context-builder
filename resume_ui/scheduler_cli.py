@@ -15,6 +15,8 @@ from kb.db import (
     update_job_run,
     finish_job_run,
     is_cancel_requested,
+    fetch_last_success,
+    fetch_job_sla,
 )
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from kb.upsert import upsert_markdown_files
@@ -95,6 +97,7 @@ def main() -> None:
     p_add.add_argument("--cron", dest="cron", help="Cron expression (e.g. '0 * * * *')")
     p_add.add_argument("--interval", dest="interval", type=int, help="Interval minutes (alternative to cron)")
     p_add.add_argument("--name", dest="name", help="Human-friendly job name")
+    p_add.add_argument("--sla-minutes", dest="sla", type=int, help="SLA window in minutes for catch-up on startup")
 
     p_list = sub.add_parser("list", help="List jobs")
 
@@ -124,7 +127,7 @@ def main() -> None:
             raise SystemExit(f"Input directory not found: {in_dir}")
         md_out = Path(args.md_out).expanduser().resolve() if args.md_out else None
 
-        ensure_job(args.job_id, args.name or None, str(in_dir), str(md_out) if md_out else None)
+        ensure_job(args.job_id, args.name or None, str(in_dir), str(md_out) if md_out else None, args.sla if args.sla is not None else None)
         sched.add_job(
             _job_ingest,
             id=args.job_id,
@@ -159,6 +162,38 @@ def main() -> None:
         # Blocking scheduler that runs due jobs on startup (coalesce)
         try:
             sched.start()
+            # SLA catch-up: queue one-off runs for jobs out of SLA
+            from apscheduler.triggers.date import DateTrigger
+            from datetime import datetime, timezone, timedelta
+            for job in sched.get_jobs():
+                jid = job.id
+                sla = fetch_job_sla(jid)
+                if sla is None:
+                    continue
+                last = fetch_last_success(jid)
+                overdue = False
+                if last:
+                    try:
+                        last_dt = datetime.fromisoformat(last)
+                        now = datetime.now(timezone.utc)
+                        if (now - last_dt).total_seconds() > sla * 60:
+                            overdue = True
+                    except Exception:
+                        overdue = True
+                else:
+                    overdue = True
+                if overdue:
+                    run_id = f"catchup::{jid}"
+                    try:
+                        sched.add_job(
+                            _job_ingest,
+                            id=run_id,
+                            args=[job.args[0] if job.args else '', job.args[1] if (job.args and len(job.args)>1) else None, jid, f"Catch-up for {jid}"],
+                            trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)),
+                            replace_existing=True,
+                        )
+                    except Exception:
+                        pass
             print("Scheduler started. Press Ctrl+C to stop.")
             import time
             while True:
