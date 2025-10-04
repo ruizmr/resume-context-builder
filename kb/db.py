@@ -60,17 +60,17 @@ def init_schema(engine: Engine) -> None:
 			)
 		)
         conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS file_index (
-                    path TEXT PRIMARY KEY,
-                    sha256 TEXT,
-                    params_sig TEXT,
-                    updated_at TEXT
-                )
-                """
-            )
-        )
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS file_index (
+					path TEXT PRIMARY KEY,
+					sha256 TEXT,
+					params_sig TEXT,
+					updated_at TEXT
+				)
+				"""
+			)
+		)
 
 
 def compute_hash(content: str) -> str:
