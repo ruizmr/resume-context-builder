@@ -1,4 +1,5 @@
 import os
+import hashlib
 import base64
 import zipfile
 import json
@@ -133,7 +134,6 @@ with st.sidebar:
             st.success("Settings saved")
         except Exception as e:
             st.error(f"Failed to save settings: {e}")
-    st.caption("KB search configuration")
     st.caption("KB search configuration")
     kb_top_k = st.number_input(
         "Max results",
@@ -484,15 +484,11 @@ with manage_tab:
             st.number_input("Day of month", min_value=1, max_value=31, value=int(st.session_state.get("sync_dom", 1)), step=1, key="sync_dom")
             st.time_input("Time of day", value=st.session_state.get("sync_time_monthly", dt_time(2, 0)), key="sync_time_monthly")
 
-    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns([1,1,1,1])
+    col_btn1, col_btn2 = st.columns([1,1])
     with col_btn1:
-        start_sync = st.button("Start", use_container_width=True)
+        add_job = st.button("Add job", use_container_width=True)
     with col_btn2:
-        stop_sync = st.button("Stop", use_container_width=True)
-    with col_btn3:
-        list_sync = st.button("List jobs", use_container_width=True)
-    with col_btn4:
-        remove_sync = st.button("Remove job", use_container_width=True)
+        run_now = st.button("Run now", use_container_width=True)
 
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.executors.pool import ThreadPoolExecutor
@@ -513,7 +509,7 @@ with manage_tab:
             st.session_state["ui_scheduler"].start()
 
     job_id = "ui_continuous_sync"
-    if start_sync:
+    if add_job:
         try:
             _ensure_sched_started()
             sched = st.session_state["ui_scheduler"]
@@ -521,67 +517,112 @@ with manage_tab:
             if schedule_mode == "Daily":
                 t = st.session_state.get("sync_time", dt_time(2, 0))
                 trigger = CronTrigger(hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                human_sched = f"Daily at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
             elif schedule_mode == "Weekly":
                 t = st.session_state.get("sync_time_weekly", dt_time(2, 0))
                 days = st.session_state.get("sync_weekdays", ["Mon"]) or ["Mon"]
                 dow_map = {"Mon": "mon", "Tue": "tue", "Wed": "wed", "Thu": "thu", "Fri": "fri", "Sat": "sat", "Sun": "sun"}
                 day_str = ",".join([dow_map.get(d, "mon") for d in days])
                 trigger = CronTrigger(day_of_week=day_str, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                human_sched = f"Weekly on {', '.join(days)} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
             elif schedule_mode == "Monthly":
                 t = st.session_state.get("sync_time_monthly", dt_time(2, 0))
                 dom = int(st.session_state.get("sync_dom", 1))
                 trigger = CronTrigger(day=dom, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                human_sched = f"Monthly on day {dom} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
             elif schedule_mode == "Every X minutes":
                 trigger = IntervalTrigger(minutes=int(interval_minutes))
+                human_sched = f"Every {int(interval_minutes)} minute(s)"
             else:
                 trigger = CronTrigger.from_crontab(str(cron_expr))
+                human_sched = f"Cron: {cron_expr}"
             in_dir = sync_folder.strip()
             if not in_dir:
                 st.error("Please provide a folder to sync")
             else:
-                sched.add_job(_job_ingest_fn, id=job_id, args=[in_dir, md_out_target or None], trigger=trigger, replace_existing=True)
+                base = Path(in_dir).name or "folder"
+                jid = f"sync::{hashlib.sha1(in_dir.encode('utf-8')).hexdigest()[:8]}::{base}"
+                jname = f"{base} — {human_sched}"
+                sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None], trigger=trigger, replace_existing=True)
                 st.success("Continuous sync enabled")
         except Exception as e:
             st.error(f"Failed to start: {e}")
 
-    if stop_sync:
+    if run_now:
         try:
-            if "ui_scheduler" in st.session_state:
-                sched = st.session_state["ui_scheduler"]
-                try:
-                    sched.remove_job(job_id)
-                except Exception:
-                    pass
-                st.success("Continuous sync stopped")
-        except Exception as e:
-            st.error(f"Failed to stop: {e}")
-
-    if list_sync:
-        try:
-            _ensure_sched_started()
-            sched = st.session_state["ui_scheduler"]
-            jobs = sched.get_jobs()
-            if not jobs:
-                st.info("No scheduled jobs")
+            in_dir = sync_folder.strip()
+            if not in_dir or not os.path.isdir(in_dir):
+                st.error("Please provide a valid folder to sync")
             else:
-                for j in jobs:
-                    st.caption(f"{j.id}: {j.trigger} next={j.next_run_time}")
+                with st.spinner("Running sync…"):
+                    _job_ingest_fn(in_dir, md_out_target or None)
+                st.success("Sync completed")
         except Exception as e:
-            st.error(f"Failed to list jobs: {e}")
+            st.error(f"Run failed: {e}")
 
-    if remove_sync:
-        try:
-            _ensure_sched_started()
-            sched = st.session_state["ui_scheduler"]
-            try:
-                sched.remove_job(job_id)
-                st.success("Removed scheduled job")
-            except Exception as e:
-                st.error(f"Failed to remove: {e}")
-        except Exception as e:
-            st.error(f"Failed to remove: {e}")
+    # Always show current jobs with human-friendly labels and selection for removal
+    try:
+        _ensure_sched_started()
+        sched = st.session_state["ui_scheduler"]
+        jobs = sched.get_jobs()
+        if not jobs:
+            st.info("No scheduled jobs")
+        else:
+            labels = {}
+            options = []
+            for j in jobs:
+                folder = None
+                try:
+                    if j.args and len(j.args) >= 1 and isinstance(j.args[0], str):
+                        folder = Path(j.args[0]).name
+                except Exception:
+                    folder = None
+                label = j.name or f"{folder or j.id} — {str(j.trigger)}"
+                if j.next_run_time:
+                    label = f"{label} — next {j.next_run_time}"
+                labels[j.id] = label
+                options.append(j.id)
+            st.caption("Scheduled jobs")
+            selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
+            col_rm, col_run_sel = st.columns([1,1])
+            with col_rm:
+                if st.button("Remove selected", disabled=(not selected_jobs)):
+                    removed = 0
+                    for jid in list(selected_jobs):
+                        try:
+                            sched.remove_job(jid)
+                            removed += 1
+                        except Exception:
+                            pass
+                    if removed > 0:
+                        st.success(f"Removed {removed} job(s)")
+                    else:
+                        st.info("No jobs removed")
+            with col_run_sel:
+                if st.button("Run selected now", disabled=(not selected_jobs)):
+                    ran = 0
+                    for jid in list(selected_jobs):
+                        try:
+                            j = sched.get_job(jid)
+                            if j and j.args and isinstance(j.args[0], str):
+                                in_dir = j.args[0]
+                                out_dir = j.args[1] if len(j.args) > 1 else None
+                                with st.spinner(f"Running {Path(in_dir).name}…"):
+                                    _job_ingest_fn(in_dir, out_dir)
+                                ran += 1
+                        except Exception:
+                            pass
+                    if ran > 0:
+                        st.success(f"Ran {ran} job(s)")
+                    else:
+                        st.info("No jobs ran")
+    except Exception as e:
+        st.error(f"Failed to list/remove jobs: {e}")
+
+    # Removed single remove button; handled via multiselect above
 
     st.divider()
+    st.subheader("Edit and delete knowledge")
 
     def _friendly_title(path: str, chunk_name: str, content: str) -> str:
         # Prefer first Markdown heading if present
