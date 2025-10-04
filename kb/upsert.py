@@ -26,6 +26,37 @@ def _find_prev_boundary(text: str, approx_char_idx: int, window: int = 500) -> i
 	return approx_char_idx
 
 
+def _find_next_boundary(text: str, approx_char_idx: int, window: int = 500) -> int:
+	"""Find a reasonable next boundary near approx_char_idx.
+
+	Prefers blank line or markdown heading. Falls back to next whitespace.
+	"""
+	end = min(len(text), approx_char_idx + window)
+	snippet = text[approx_char_idx:end]
+	# If we're already at a boundary (whitespace), keep it
+	if approx_char_idx <= 0 or approx_char_idx >= len(text):
+		return max(0, min(len(text), approx_char_idx))
+	if text[approx_char_idx - 1].isspace():
+		return approx_char_idx
+	# Prefer double newline boundary ahead
+	bl = snippet.find("\n\n")
+	if bl != -1:
+		return approx_char_idx + bl + 2
+	# Prefer next heading
+	for pat in (r"\n# ", r"\n## ", r"\n### "):
+		m = re.search(pat, snippet)
+		if m:
+			return approx_char_idx + m.start() + 1
+	# Next whitespace boundary
+	m = re.search(r"\s", snippet)
+	if m:
+		pos = approx_char_idx + m.start()
+		while pos < len(text) and text[pos].isspace():
+			pos += 1
+		return pos
+	return approx_char_idx
+
+
 def slice_text_tokens(
 	text: str,
 	max_tokens: int = 1500,
@@ -46,13 +77,22 @@ def slice_text_tokens(
 		if not chunk_toks:
 			break
 		candidate = enc.decode(chunk_toks)
-		# Try to align the end to a nearby boundary
-		if i + max_tokens < len(toks):
-			# estimate char idx of the end
-			approx_end = len(enc.decode(toks[: i + max_tokens]))
-			adj = _find_prev_boundary(text, approx_end)
-			candidate = text[len(enc.decode(toks[:i])) : adj]
-		chunks.append(candidate)
+		# Estimate char indices for start and end
+		approx_start = len(enc.decode(toks[:i]))
+		approx_end = len(enc.decode(toks[: i + max_tokens]))
+		# Align to sensible boundaries to avoid mid-word cuts
+		start_adj = 0 if i == 0 else _find_next_boundary(text, approx_start)
+		end_adj = _find_prev_boundary(text, approx_end)
+		# Guard against inverted/empty ranges
+		if end_adj <= start_adj:
+			# Fallback: keep original token-decoded candidate span
+			start_adj = approx_start
+			end_adj = max(approx_end, start_adj)
+		# Ensure we slice within bounds
+		start_adj = max(0, min(len(text), start_adj))
+		end_adj = max(start_adj, min(len(text), end_adj))
+		refined = text[start_adj:end_adj].strip()
+		chunks.append(refined if refined else candidate)
 	return chunks
 
 

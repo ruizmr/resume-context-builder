@@ -136,8 +136,8 @@ with st.sidebar:
         "Minimum score",
         min_value=0.0,
         max_value=1.0,
-        value=float(st.session_state.get("kb_min_score", 0.0)),
-        step=0.01,
+        value=float(st.session_state.get("kb_min_score", 0.005)),
+        step=0.005,
         key="kb_min_score",
     )
 

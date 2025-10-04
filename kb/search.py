@@ -99,7 +99,34 @@ class HybridSearcher:
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
 			text = self.texts[idx]
-			snippet = text[:400]
+			# Build a better snippet centered around query terms and avoid mid-word cuts
+			q_terms = [t for t in (query.lower().split()) if len(t) >= 2]
+			pos = -1
+			for t in q_terms:
+				p = text.lower().find(t)
+				if p != -1:
+					pos = p
+					break
+			start = 0
+			if pos != -1:
+				start = max(0, pos - 120)
+			end = min(len(text), start + 400)
+			snippet_raw = text[start:end]
+			# Expand to nearest whitespace to avoid cutting words
+			try:
+				# trim leading partial word
+				if start > 0 and not snippet_raw[:1].isspace():
+					lead = snippet_raw.find(" ")
+					if lead != -1 and lead < 40:
+						snippet_raw = snippet_raw[lead + 1:]
+				# trim trailing partial word
+				if end < len(text) and not snippet_raw[-1:].isspace():
+					tail = snippet_raw.rfind(" ")
+					if tail != -1 and (len(snippet_raw) - tail) < 40:
+						snippet_raw = snippet_raw[:tail]
+			except Exception:
+				pass
+			snippet = snippet_raw.strip()
 			results.append((cid, score, path, cname, snippet, text))
 		return results
 
