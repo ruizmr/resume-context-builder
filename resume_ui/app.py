@@ -486,9 +486,9 @@ with manage_tab:
 
     col_btn1, col_btn2 = st.columns([1,1])
     with col_btn1:
-        add_job = st.button("Add job", use_container_width=True)
+        add_job = st.button("Add job", use_container_width=True, key="ui_jobs_add_btn")
     with col_btn2:
-        run_now = st.button("Run now", use_container_width=True)
+        run_now = st.button("Run now", use_container_width=True, key="ui_jobs_run_now_btn")
 
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.executors.pool import ThreadPoolExecutor
@@ -586,7 +586,7 @@ with manage_tab:
             selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
             col_rm, col_run_sel = st.columns([1,1])
             with col_rm:
-                if st.button("Remove selected", disabled=(not selected_jobs)):
+                if st.button("Remove selected", disabled=(not selected_jobs), key="ui_jobs_remove_btn"):
                     removed = 0
                     for jid in list(selected_jobs):
                         try:
@@ -599,7 +599,7 @@ with manage_tab:
                     else:
                         st.info("No jobs removed")
             with col_run_sel:
-                if st.button("Run selected now", disabled=(not selected_jobs)):
+                if st.button("Run selected now", disabled=(not selected_jobs), key="ui_jobs_run_selected_btn"):
                     ran = 0
                     for jid in list(selected_jobs):
                         try:
