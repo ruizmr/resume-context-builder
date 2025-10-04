@@ -9,6 +9,7 @@ from sqlalchemy import (
 	text,
 	Engine,
 )
+import uuid
 
 
 STATE_DIR = Path.home() / ".context-packager-state"
@@ -71,6 +72,206 @@ def init_schema(engine: Engine) -> None:
 				"""
 			)
 		)
+		# Jobs metadata for scheduler visibility
+		conn.execute(
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS jobs (
+					id TEXT PRIMARY KEY,
+					name TEXT,
+					input_dir TEXT,
+					md_out_dir TEXT,
+					created_at TEXT,
+					updated_at TEXT
+				)
+				"""
+			)
+		)
+		# Per-run tracking for progress/logs/history
+		conn.execute(
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS job_runs (
+					id TEXT PRIMARY KEY,
+					job_id TEXT,
+					input_dir TEXT,
+					md_out_dir TEXT,
+					status TEXT,
+					progress INTEGER,
+					processed_files INTEGER,
+					total_files INTEGER,
+					chunks_upserted INTEGER,
+					started_at TEXT,
+					finished_at TEXT,
+					last_message TEXT,
+					log TEXT,
+					cancel_requested INTEGER DEFAULT 0,
+					error TEXT
+				)
+				"""
+			)
+		)
+		conn.execute(
+			text(
+				"""
+				CREATE INDEX IF NOT EXISTS idx_job_runs_started_at ON job_runs(started_at)
+				"""
+			)
+		)
+
+
+def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | None) -> None:
+	"""Upsert a job metadata row for visibility in UI.
+
+	This is independent from APScheduler's job store and serves only for display.
+	"""
+	engine = get_engine()
+	now = datetime.utcnow().isoformat()
+	with engine.begin() as conn:
+		conn.execute(
+			text(
+				"""
+				INSERT INTO jobs(id, name, input_dir, md_out_dir, created_at, updated_at)
+				VALUES(:id, :name, :in_dir, :out_dir, :now, :now)
+				ON CONFLICT(id) DO UPDATE SET
+					name=excluded.name,
+					input_dir=excluded.input_dir,
+					md_out_dir=excluded.md_out_dir,
+					updated_at=excluded.updated_at
+				"""
+			),
+			{"id": job_id, "name": name, "in_dir": input_dir, "out_dir": md_out_dir, "now": now},
+		)
+
+
+def start_job_run(job_id: str | None, input_dir: str, md_out_dir: str | None) -> str:
+	"""Create a job_run row and return its id."""
+	engine = get_engine()
+	run_id = uuid.uuid4().hex
+	now = datetime.utcnow().isoformat()
+	with engine.begin() as conn:
+		conn.execute(
+			text(
+				"""
+				INSERT INTO job_runs(id, job_id, input_dir, md_out_dir, status, progress, processed_files, total_files, chunks_upserted, started_at, finished_at, last_message, log, cancel_requested, error)
+				VALUES(:id, :job_id, :in_dir, :out_dir, 'running', 0, 0, 0, 0, :now, NULL, '', '', 0, NULL)
+				"""
+			),
+			{"id": run_id, "job_id": job_id, "in_dir": input_dir, "out_dir": md_out_dir, "now": now},
+		)
+	return run_id
+
+
+def update_job_run(
+	run_id: str,
+	*,
+	status: str | None = None,
+	progress: int | None = None,
+	processed_files: int | None = None,
+	total_files: int | None = None,
+	chunks_upserted: int | None = None,
+	last_message: str | None = None,
+	append_log: str | None = None,
+	error: str | None = None,
+) -> None:
+	"""Partial update of a job_run row."""
+	engine = get_engine()
+	# Build dynamic SET clause
+	sets: list[str] = []
+	params: dict = {"id": run_id}
+	if status is not None:
+		sets.append("status=:status")
+		params["status"] = status
+	if progress is not None:
+		sets.append("progress=:progress")
+		params["progress"] = int(max(0, min(100, progress)))
+	if processed_files is not None:
+		sets.append("processed_files=:pf")
+		params["pf"] = int(processed_files)
+	if total_files is not None:
+		sets.append("total_files=:tf")
+		params["tf"] = int(total_files)
+	if chunks_upserted is not None:
+		sets.append("chunks_upserted=:cu")
+		params["cu"] = int(chunks_upserted)
+	if last_message is not None:
+		sets.append("last_message=:lm")
+		params["lm"] = str(last_message)
+	if error is not None:
+		sets.append("error=:err")
+		params["err"] = str(error)
+	stmt = "UPDATE job_runs SET " + ", ".join(sets) + " WHERE id=:id"
+	if sets:
+		with engine.begin() as conn:
+			conn.execute(text(stmt), params)
+	if append_log:
+		with engine.begin() as conn:
+			conn.execute(
+				text(
+					"""
+					UPDATE job_runs
+					SET log=COALESCE(log,'') || :chunk
+					WHERE id=:id
+					"""
+				),
+				{"id": run_id, "chunk": (append_log or "")},
+			)
+
+
+def finish_job_run(run_id: str, *, status: str, error: str | None = None) -> None:
+	"""Mark a run finished and set status and optional error."""
+	engine = get_engine()
+	now = datetime.utcnow().isoformat()
+	with engine.begin() as conn:
+		conn.execute(
+			text(
+				"""
+				UPDATE job_runs
+				SET status=:status, finished_at=:now, error=:error
+				WHERE id=:id
+				"""
+			),
+			{"id": run_id, "status": status, "now": now, "error": error},
+		)
+
+
+def request_cancel_run(run_id: str) -> None:
+	"""Signal a running job to cancel."""
+	engine = get_engine()
+	with engine.begin() as conn:
+		conn.execute(text("UPDATE job_runs SET cancel_requested=1 WHERE id=:id"), {"id": run_id})
+
+
+def is_cancel_requested(run_id: str) -> bool:
+	engine = get_engine()
+	with engine.begin() as conn:
+		row = conn.execute(text("SELECT cancel_requested FROM job_runs WHERE id=:id"), {"id": run_id}).fetchone()
+		try:
+			return bool(row[0]) if row else False
+		except Exception:
+			return False
+
+
+def fetch_recent_runs(limit: int = 50, job_id: str | None = None) -> List[Tuple]:
+	"""Return recent job runs, newest first."""
+	engine = get_engine()
+	params: dict = {"limit": int(limit)}
+	query = "SELECT id, job_id, input_dir, md_out_dir, status, progress, processed_files, total_files, chunks_upserted, started_at, finished_at, last_message, substr(log, -5000), cancel_requested, error FROM job_runs"
+	if job_id:
+		query += " WHERE job_id=:job_id"
+		params["job_id"] = job_id
+	query += " ORDER BY started_at DESC LIMIT :limit"
+	with engine.begin() as conn:
+		rows = conn.execute(text(query), params)
+		return [tuple(r) for r in rows]
+
+
+def fetch_jobs() -> List[Tuple[str, str, str, str, str, str]]:
+	"""Return (id, name, input_dir, md_out_dir, created_at, updated_at)."""
+	engine = get_engine()
+	with engine.begin() as conn:
+		rows = conn.execute(text("SELECT id, name, input_dir, md_out_dir, created_at, updated_at FROM jobs ORDER BY updated_at DESC"))
+		return [tuple(r) for r in rows]
 
 
 def compute_hash(content: str) -> str:
@@ -221,7 +422,7 @@ def factory_reset_db() -> None:
 		# Non-SQLite: drop known tables and reinit schema
 		engine = create_engine(url, future=True, pool_pre_ping=True)
 		with engine.begin() as conn:
-			for tbl in ("apscheduler_jobs", "chunks", "file_index"):
+			for tbl in ("apscheduler_jobs", "chunks", "file_index", "jobs", "job_runs"):
 				try:
 					conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
 				except Exception:

@@ -58,12 +58,13 @@ def convert_file_to_markdown(src_path: Path, output_path: Path, markitdown_clien
 
 
 def convert_documents_to_markdown(
-	input_dir: str | Path,
-	output_dir: str | Path,
-	*,
-	write_index: bool = True,
-	progress_cb: Optional[Callable[[int, int, Path], None]] = None,
-	timing_cb: Optional[Callable[[Path, float], None]] = None,
+    input_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    write_index: bool = True,
+    progress_cb: Optional[Callable[[int, int, Path], None]] = None,
+    timing_cb: Optional[Callable[[Path, float], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
 	"""Convert all supported files under input_dir to Markdown under output_dir, mirroring structure.
 
@@ -79,7 +80,14 @@ def convert_documents_to_markdown(
 
 	files = find_input_files(input_root)
 	total = len(files)
-	for idx, src in enumerate(files):
+    for idx, src in enumerate(files):
+        if cancel_cb is not None:
+            try:
+                if cancel_cb():
+                    break
+            except Exception:
+                # ignore cancel errors
+                pass
 		rel = src.relative_to(input_root)
 		md_path = output_root / rel.with_suffix(".md")
 		try:
@@ -115,21 +123,23 @@ def convert_documents_to_markdown(
 
 
 def convert_pdfs_to_markdown(
-	input_dir: str | Path,
-	output_dir: str | Path,
-	*,
-	write_index: bool = True,
-	progress_cb: Optional[Callable[[int, int, Path], None]] = None,
-	timing_cb: Optional[Callable[[Path, float], None]] = None,
+    input_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    write_index: bool = True,
+    progress_cb: Optional[Callable[[int, int, Path], None]] = None,
+    timing_cb: Optional[Callable[[Path, float], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
 	"""Backward compatible wrapper: converts any supported files under input_dir to Markdown."""
-	return convert_documents_to_markdown(
-		input_dir,
-		output_dir,
-		write_index=write_index,
-		progress_cb=progress_cb,
-		timing_cb=timing_cb,
-	)
+    return convert_documents_to_markdown(
+        input_dir,
+        output_dir,
+        write_index=write_index,
+        progress_cb=progress_cb,
+        timing_cb=timing_cb,
+        cancel_cb=cancel_cb,
+    )
 
 
 if __name__ == "__main__":

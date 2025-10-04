@@ -123,3 +123,19 @@ uv tool uninstall resume-ui || true
 # Reinstall and pin to main
 sh -c 'command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh); PATH="$HOME/.local/bin:$PATH" uvx --python 3.12 --refresh --from "git+https://github.com/ruizmr/resume-context-builder.git@main?extra=full" resume-ui'
 ```
+
+## 5. Scheduler visibility and continuous sync
+
+- Jobs added via UI or `context-scheduler add` are mirrored in a lightweight `jobs` table for display.
+- Every execution (scheduled or one-off) creates a `job_runs` record with:
+  - status: queued, running, success, failed, cancelled
+  - progress: 0-100, processed/total files, chunks upserted
+  - recent log tail and last message
+- In the UI Manage knowledge tab:
+  - Add job with Daily/Weekly/Monthly/Interval/Cron.
+  - Run now for ad-hoc runs.
+  - View recent runs with progress and cancel running jobs.
+
+Environment notes:
+- Set `CONTEXT_DB_URL` to persist job/run history in a shared DB.
+- APScheduler jobs are still stored in `apscheduler_jobs` table via `SQLAlchemyJobStore` for durability.

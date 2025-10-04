@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Callable
 
 import re
 import tiktoken
@@ -97,15 +97,29 @@ def slice_text_tokens(
 
 
 def upsert_markdown_files(
-	md_files: List[Path],
-	*,
-	max_tokens_per_chunk: Optional[int] = 1500,
-	overlap_tokens: int = 150,
-	encoding_name: str = "o200k_base",
+    md_files: List[Path],
+    *,
+    max_tokens_per_chunk: Optional[int] = 1500,
+    overlap_tokens: int = 150,
+    encoding_name: str = "o200k_base",
+    progress_cb: Optional[Callable[[int, int, Path], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> int:
 	engine = get_engine()
 	records: List[Tuple[str, str, str]] = []
-	for md in md_files:
+    total = len(md_files)
+    for idx, md in enumerate(md_files):
+        if cancel_cb is not None:
+            try:
+                if cancel_cb():
+                    break
+            except Exception:
+                pass
+        if progress_cb is not None:
+            try:
+                progress_cb(idx + 1, total, md)
+            except Exception:
+                pass
 		try:
 			content = md.read_text(encoding="utf-8")
 			# Compute file-level hash and params signature to skip unchanged
@@ -137,6 +151,6 @@ def upsert_markdown_files(
 			continue
 	if records:
 		upsert_chunks(engine, records)
-	return len(records)
+    return len(records)
 
 
