@@ -6,7 +6,7 @@ import json
 import uuid
 from pathlib import Path
 import importlib.resources as resources
-from datetime import time as dt_time
+from datetime import time as dt_time, datetime, timedelta, timezone
 
 import streamlit as st
 import tiktoken
@@ -50,8 +50,8 @@ PERSIST_KEYS = [
     "encoding_name",
     "kb_top_k",
     "kb_min_score",
-        "kb_neighbors",
-        "kb_sequence",
+    "kb_neighbors",
+    "kb_sequence",
 ]
 
 
@@ -81,48 +81,35 @@ for _k in PERSIST_KEYS:
 if "instruction_file" not in st.session_state:
     st.session_state["instruction_file"] = default_instr
 
+# Ensure defaults exist in session state for sidebar widgets to avoid value/key conflicts
+_defaults_map = {
+    "md_dir": default_md_dir,
+    "output_file": default_out_file,
+    "attach_instructions": True,
+    "instruction_file": default_instr,
+    "header_text": "Context Pack",
+    "max_tokens": 120000,
+    "encoding_name": "o200k_base",
+    "kb_top_k": 5,
+    "kb_min_score": 0.005,
+    "kb_neighbors": 0,
+    "kb_sequence": True,
+}
+for _k, _v in _defaults_map.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
 # Reusable copy widget
 
 with st.sidebar:
     st.header("Settings")
-    md_dir = st.text_input(
-        "Markdown output directory",
-        value=st.session_state.get("md_dir", default_md_dir),
-        key="md_dir",
-    )
-    output_file = st.text_input(
-        "Context output file",
-        value=st.session_state.get("output_file", default_out_file),
-        key="output_file",
-    )
-    attach_instructions = st.checkbox(
-        "Attach instructions",
-        value=bool(st.session_state.get("attach_instructions", True)),
-        key="attach_instructions",
-    )
-    instruction_file = st.text_input(
-        "Instructions file (Markdown)",
-        value=st.session_state.get("instruction_file", default_instr),
-        key="instruction_file",
-    )
-    header_text = st.text_input(
-        "Document header",
-        value=st.session_state.get("header_text", "Context Pack"),
-        key="header_text",
-    )
-    max_tokens = st.number_input(
-        "Max tokens per chunk (0 = no split)",
-        value=int(st.session_state.get("max_tokens", 120000)),
-        min_value=0,
-        step=1000,
-        key="max_tokens",
-    )
-    encoding_name = st.selectbox(
-        "Tokenizer",
-        options=["o200k_base", "cl100k_base"],
-        index=(0 if st.session_state.get("encoding_name", "o200k_base") == "o200k_base" else 1),
-        key="encoding_name",
-    )
+    md_dir = st.text_input("Markdown output directory", key="md_dir")
+    output_file = st.text_input("Context output file", key="output_file")
+    attach_instructions = st.checkbox("Attach instructions", key="attach_instructions")
+    instruction_file = st.text_input("Instructions file (Markdown)", key="instruction_file")
+    header_text = st.text_input("Document header", key="header_text")
+    max_tokens = st.number_input("Max tokens per chunk (0 = no split)", min_value=0, step=1000, key="max_tokens")
+    encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], key="encoding_name")
     # persist settings so search uses the same caps/encoding
     st.session_state["max_tokens_config"] = int(max_tokens or 0)
     # moved include_kb next to build controls below
@@ -135,35 +122,10 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed to save settings: {e}")
     st.caption("KB search configuration")
-    kb_top_k = st.number_input(
-        "Max results",
-        value=int(st.session_state.get("kb_top_k", 5)),
-        min_value=1,
-        max_value=50,
-        step=1,
-        key="kb_top_k",
-    )
-    kb_min_score = st.slider(
-        "Minimum score",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(st.session_state.get("kb_min_score", 0.005)),
-        step=0.005,
-        key="kb_min_score",
-    )
-    kb_neighbors = st.number_input(
-        "Neighbors to include (per match)",
-        value=int(st.session_state.get("kb_neighbors", 0)),
-        min_value=0,
-        max_value=10,
-        step=1,
-        key="kb_neighbors",
-    )
-    kb_sequence = st.checkbox(
-        "Preserve document sequence (group by file, in order)",
-        value=bool(st.session_state.get("kb_sequence", True)),
-        key="kb_sequence",
-    )
+    kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
+    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
+    kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
+    kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -495,6 +457,7 @@ with manage_tab:
     from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
     from apscheduler.triggers.interval import IntervalTrigger
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.date import DateTrigger
     from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
 
     def _get_scheduler():
@@ -554,9 +517,11 @@ with manage_tab:
             if not in_dir or not os.path.isdir(in_dir):
                 st.error("Please provide a valid folder to sync")
             else:
-                with st.spinner("Running sync…"):
-                    _job_ingest_fn(in_dir, md_out_target or None)
-                st.success("Sync completed")
+                _ensure_sched_started()
+                sched = st.session_state["ui_scheduler"]
+                jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
+                sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                st.success("Queued run in background")
         except Exception as e:
             st.error(f"Run failed: {e}")
 
@@ -588,6 +553,7 @@ with manage_tab:
                 col_rm, col_run_sel = st.columns([1,1])
                 rm_pressed = col_rm.form_submit_button("Remove selected", disabled=(not selected_jobs), use_container_width=True)
                 run_pressed = col_run_sel.form_submit_button("Run selected now", disabled=(not selected_jobs), use_container_width=True)
+                purge_pressed = st.form_submit_button("Purge all jobs", use_container_width=True)
                 if rm_pressed:
                     removed = 0
                     for jid in list(selected_jobs):
@@ -601,22 +567,32 @@ with manage_tab:
                     else:
                         st.info("No jobs removed")
                 if run_pressed:
-                    ran = 0
+                    queued = 0
+                if purge_pressed:
+                    try:
+                        for jid in list(options):
+                            try:
+                                sched.remove_job(jid)
+                            except Exception:
+                                pass
+                        st.success("Purged all jobs")
+                    except Exception as e:
+                        st.error(f"Failed to purge: {e}")
                     for jid in list(selected_jobs):
                         try:
                             j = sched.get_job(jid)
                             if j and j.args and isinstance(j.args[0], str):
                                 in_dir = j.args[0]
                                 out_dir = j.args[1] if len(j.args) > 1 else None
-                                with st.spinner(f"Running {Path(in_dir).name}…"):
-                                    _job_ingest_fn(in_dir, out_dir)
-                                ran += 1
+                                rqid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
+                                sched.add_job(_job_ingest_fn, id=rqid, args=[in_dir, out_dir], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                                queued += 1
                         except Exception:
                             pass
-                    if ran > 0:
-                        st.success(f"Ran {ran} job(s)")
+                    if queued > 0:
+                        st.success(f"Queued {queued} job(s)")
                     else:
-                        st.info("No jobs ran")
+                        st.info("No jobs queued")
     except Exception as e:
         st.error(f"Failed to list/remove jobs: {e}")
 
