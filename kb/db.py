@@ -59,7 +59,7 @@ def init_schema(engine: Engine) -> None:
 				"""
 			)
 		)
-        conn.execute(
+		conn.execute(
 			text(
 				"""
 				CREATE TABLE IF NOT EXISTS file_index (
