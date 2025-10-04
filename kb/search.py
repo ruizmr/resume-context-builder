@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np
+import re
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
@@ -34,6 +35,8 @@ class HybridSearcher:
 		self.doc_vectors_reduced: np.ndarray | None = None
 		self.hnsw_index = None
 		self.hnsw_dim: int = 0
+		# Map of file path -> list of matrix indices ordered by chunk number
+		self.path_to_ordered_indices: Dict[str, List[int]] = {}
 
 	def fit(self, docs: List[Tuple[int, str, str, str]]):
 		# docs: (id, path, chunk_name, content)
@@ -42,6 +45,15 @@ class HybridSearcher:
 		self.texts = [d[3] for d in docs]
 		if self.texts:
 			self.matrix = self.vectorizer.fit_transform(self.texts)
+			# Build path -> ordered matrix index list for neighbor sequencing
+			order_map: Dict[str, List[Tuple[int, int]]] = {}
+			for m_idx, (path, cname) in enumerate(self.meta):
+				m = re.search(r"(\d+)$", cname)  # expect names like 'part12'
+				chunk_num = int(m.group(1)) if m else (m_idx + 1)
+				order_map.setdefault(path, []).append((chunk_num, m_idx))
+			self.path_to_ordered_indices = {
+				p: [mi for _, mi in sorted(pairs, key=lambda x: x[0])] for p, pairs in order_map.items()
+			}
 			# Build HNSW if available and enough docs
 			if hnswlib is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
 				# Choose a safe number of components
@@ -62,7 +74,7 @@ class HybridSearcher:
 					self.doc_vectors_reduced = None
 					self.hnsw_index = None
 
-	def search(self, query: str, top_k: int = 5) -> List[Tuple[int, float, str, str, str, str]]:
+	def search(self, query: str, top_k: int = 5, neighbors: int = 0, sequence: bool = False) -> List[Tuple[int, float, str, str, str, str]]:
 		"""Return (id, score, path, chunk_name, snippet, full_text)."""
 		if not self.texts:
 			return []
@@ -90,12 +102,82 @@ class HybridSearcher:
 		if candidate_idx.size == 0:
 			return []
 		cand_matrix = self.matrix[candidate_idx]
-		scores = linear_kernel(q_vec, cand_matrix).ravel()
-		order = np.argsort(scores)[::-1][:k]
+		cand_scores = linear_kernel(q_vec, cand_matrix).ravel()
+		order = np.argsort(cand_scores)[::-1][:k]
 		ordered_idx = candidate_idx[order]
+		# Optionally compute scores for all docs if we need neighbor sequencing
+		all_scores = linear_kernel(q_vec, self.matrix).ravel()
+
+		# Expand with neighbors if requested
+		selected: List[int] = []
+		seen = set()
+		if neighbors and neighbors > 0 and self.path_to_ordered_indices:
+			for base_idx in ordered_idx:
+				if base_idx in seen:
+					continue
+				seen.add(base_idx)
+				selected.append(base_idx)
+				path, _ = self.meta[base_idx]
+				order_list = self.path_to_ordered_indices.get(path, [])
+				try:
+					pos = order_list.index(base_idx)
+				except ValueError:
+					pos = -1
+				if pos != -1:
+					start = max(0, pos - int(neighbors))
+					end = min(len(order_list), pos + int(neighbors) + 1)
+					for ni in order_list[start:end]:
+						if ni not in seen:
+							seen.add(ni)
+							selected.append(ni)
+		else:
+			selected = list(ordered_idx)
+
+		# Reorder results for continuity if requested
+		final_indices: List[int]
+		if sequence and selected:
+			# Group by path; order groups by best score within group
+			by_path: Dict[str, List[int]] = {}
+			for idx in selected:
+				p, _ = self.meta[idx]
+				by_path.setdefault(p, []).append(idx)
+			# Sort each group's indices by their sequential order
+			for p, idxs in by_path.items():
+				order_list = self.path_to_ordered_indices.get(p, [])
+				idxs.sort(key=lambda x: (order_list.index(x) if x in order_list else x))
+			# Order documents by their best (highest) score among selected
+			doc_order = sorted(by_path.keys(), key=lambda p: max(all_scores[i] for i in by_path[p]), reverse=True)
+			final_indices = []
+			for p in doc_order:
+				final_indices.extend(by_path[p])
+		else:
+			# Keep relevance order, but ensure neighbors stay close to their seed order
+			seed_order = list(ordered_idx)
+			final_indices = []
+			added = set()
+			for seed in seed_order:
+				for idx in selected:
+					if idx == seed and idx not in added:
+						final_indices.append(idx)
+						added.add(idx)
+						# append immediate neighbors for this seed in document order
+						p, _ = self.meta[idx]
+						order_list = self.path_to_ordered_indices.get(p, [])
+						if idx in order_list:
+							pos = order_list.index(idx)
+							start = max(0, pos - int(neighbors))
+							end = min(len(order_list), pos + int(neighbors) + 1)
+							for ni in order_list[start:end]:
+								if ni not in added and ni in selected:
+									final_indices.append(ni)
+									added.add(ni)
+
+		# Apply a reasonable cap: allow neighbors around each of top_k seeds
+		max_results = min(len(final_indices), max(k, min(len(self.ids), k * (2 * int(neighbors) + 1))))
+		final_indices = final_indices[:max_results]
 		results: List[Tuple[int, float, str, str, str, str]] = []
-		for idx in ordered_idx:
-			score = float(scores[np.where(candidate_idx == idx)[0][0]]) if candidate_idx.ndim == 1 else float(scores[idx])
+		for idx in final_indices:
+			score = float(all_scores[idx])
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
 			text = self.texts[idx]

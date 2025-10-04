@@ -48,6 +48,8 @@ PERSIST_KEYS = [
     "encoding_name",
     "kb_top_k",
     "kb_min_score",
+        "kb_neighbors",
+        "kb_sequence",
 ]
 
 
@@ -139,6 +141,19 @@ with st.sidebar:
         value=float(st.session_state.get("kb_min_score", 0.005)),
         step=0.005,
         key="kb_min_score",
+    )
+    kb_neighbors = st.number_input(
+        "Neighbors to include (per match)",
+        value=int(st.session_state.get("kb_neighbors", 0)),
+        min_value=0,
+        max_value=10,
+        step=1,
+        key="kb_neighbors",
+    )
+    kb_sequence = st.checkbox(
+        "Preserve document sequence (group by file, in order)",
+        value=bool(st.session_state.get("kb_sequence", True)),
+        key="kb_sequence",
     )
 
     st.divider()
@@ -258,7 +273,12 @@ with home_tab:
                     searcher = st.session_state["kb_searcher"]
                 top_k = int(st.session_state.get("kb_top_k", 5))
                 min_score = float(st.session_state.get("kb_min_score", 0.0))
-                results = searcher.search(st.session_state["q_top"], top_k=top_k)
+                results = searcher.search(
+                    st.session_state["q_top"],
+                    top_k=top_k,
+                    neighbors=int(st.session_state.get("kb_neighbors", 0)),
+                    sequence=bool(st.session_state.get("kb_sequence", True)),
+                )
                 # filter by minimum score
                 results = [r for r in results if r[1] >= min_score]
 
