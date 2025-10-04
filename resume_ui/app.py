@@ -560,7 +560,7 @@ with manage_tab:
         except Exception as e:
             st.error(f"Run failed: {e}")
 
-    # Always show current jobs with human-friendly labels and selection for removal
+    # Always show current jobs with human-friendly labels and selection, wrapped in a form to prevent flicker
     try:
         _ensure_sched_started()
         sched = st.session_state["ui_scheduler"]
@@ -583,10 +583,12 @@ with manage_tab:
                 labels[j.id] = label
                 options.append(j.id)
             st.caption("Scheduled jobs")
-            selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
-            col_rm, col_run_sel = st.columns([1,1])
-            with col_rm:
-                if st.button("Remove selected", disabled=(not selected_jobs), key="ui_jobs_remove_btn"):
+            with st.form("jobs_form", clear_on_submit=False):
+                selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
+                col_rm, col_run_sel = st.columns([1,1])
+                rm_pressed = col_rm.form_submit_button("Remove selected", disabled=(not selected_jobs), use_container_width=True)
+                run_pressed = col_run_sel.form_submit_button("Run selected now", disabled=(not selected_jobs), use_container_width=True)
+                if rm_pressed:
                     removed = 0
                     for jid in list(selected_jobs):
                         try:
@@ -598,8 +600,7 @@ with manage_tab:
                         st.success(f"Removed {removed} job(s)")
                     else:
                         st.info("No jobs removed")
-            with col_run_sel:
-                if st.button("Run selected now", disabled=(not selected_jobs), key="ui_jobs_run_selected_btn"):
+                if run_pressed:
                     ran = 0
                     for jid in list(selected_jobs):
                         try:
@@ -679,14 +680,16 @@ with manage_tab:
         page_options.append((rid, label))
     option_labels = {rid: label for rid, label in page_options}
 
-    # Searchable multiselect (limited to current page for performance)
-    selected_ids = st.multiselect(
-        "Select items (current page)",
-        options=[rid for rid, _ in page_options],
-        default=[rid for rid in st.session_state["kb_m_selected"] if any(rid == rid2 for rid2, _ in page_options)],
-        format_func=lambda rid: option_labels.get(rid, str(rid)),
-        key="kb_m_multi",
-    )
+    # Searchable multiselect (limited to current page for performance), wrapped in a form to reduce reruns
+    with st.form("kb_manage_form", clear_on_submit=False):
+        selected_ids = st.multiselect(
+            "Select items (current page)",
+            options=[rid for rid, _ in page_options],
+            default=[rid for rid in st.session_state.get("kb_m_selected", []) if any(rid == rid2 for rid2, _ in page_options)],
+            format_func=lambda rid: option_labels.get(rid, str(rid)),
+            key="kb_m_multi",
+        )
+        submit_del = st.form_submit_button("Apply selection")
     st.session_state["kb_m_selected"] = list(selected_ids)
 
     # Auto preview first selected, with prev/next controls if multiple
@@ -712,7 +715,9 @@ with manage_tab:
             st.text_area("Content", content, height=360)
 
     del_count = len(st.session_state["kb_m_selected"])
-    if st.button(f"Delete selected ({del_count})", type="primary", disabled=(del_count == 0)):
+    with st.form("kb_delete_form", clear_on_submit=False):
+        btn_del = st.form_submit_button(f"Delete selected ({del_count})", disabled=(del_count == 0))
+    if btn_del:
         try:
             n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
             st.success(f"Deleted {n} item(s)")
