@@ -444,6 +444,7 @@ with manage_tab:
             elif schedule_mode == "Monthly":
                 st.number_input("Day of month", min_value=1, max_value=31, step=1, key="sync_dom")
                 st.time_input("Time of day", key="sync_time_monthly")
+            sla_minutes = int(st.number_input("SLA (minutes) for catch-up", min_value=0, step=5, value=0, help="If >0, run a catch-up on startup when last success is older than SLA"))
         col1, col2 = st.columns([1,1])
         add_job_submit = col1.form_submit_button("Add job", use_container_width=True)
         run_now_submit = col2.form_submit_button("Run now", use_container_width=True)
@@ -503,7 +504,7 @@ with manage_tab:
                 base = Path(in_dir).name or "folder"
                 jid = f"sync::{hashlib.sha1(in_dir.encode('utf-8')).hexdigest()[:8]}::{base}"
                 jname = f"{base} — {human_sched}"
-                ensure_job(jid, jname, in_dir, md_out_target or None)
+                ensure_job(jid, jname, in_dir, md_out_target or None, sla_minutes if sla_minutes > 0 else None)
                 sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None, jid, jname], trigger=trigger, replace_existing=True)
                 st.success("Continuous sync enabled")
         except Exception as e:
@@ -518,7 +519,7 @@ with manage_tab:
                 _ensure_sched_started()
                 sched = st.session_state["ui_scheduler"]
                 jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
-                ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None)
+                ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None, sla_minutes if sla_minutes > 0 else None)
                 sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None, jid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
                 st.success("Queued run in background")
         except Exception as e:

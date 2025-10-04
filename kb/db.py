@@ -81,6 +81,7 @@ def init_schema(engine: Engine) -> None:
 					name TEXT,
 					input_dir TEXT,
 					md_out_dir TEXT,
+					sla_minutes INTEGER,
 					created_at TEXT,
 					updated_at TEXT
 				)
@@ -120,7 +121,7 @@ def init_schema(engine: Engine) -> None:
 		)
 
 
-def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | None) -> None:
+def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | None, sla_minutes: int | None = None) -> None:
 	"""Upsert a job metadata row for visibility in UI.
 
 	This is independent from APScheduler's job store and serves only for display.
@@ -131,16 +132,17 @@ def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | 
 		conn.execute(
 			text(
 				"""
-				INSERT INTO jobs(id, name, input_dir, md_out_dir, created_at, updated_at)
-				VALUES(:id, :name, :in_dir, :out_dir, :now, :now)
+				INSERT INTO jobs(id, name, input_dir, md_out_dir, sla_minutes, created_at, updated_at)
+				VALUES(:id, :name, :in_dir, :out_dir, :sla, :now, :now)
 				ON CONFLICT(id) DO UPDATE SET
 					name=excluded.name,
 					input_dir=excluded.input_dir,
 					md_out_dir=excluded.md_out_dir,
+					sla_minutes=excluded.sla_minutes,
 					updated_at=excluded.updated_at
 				"""
 			),
-			{"id": job_id, "name": name, "in_dir": input_dir, "out_dir": md_out_dir, "now": now},
+			{"id": job_id, "name": name, "in_dir": input_dir, "out_dir": md_out_dir, "sla": (int(sla_minutes) if sla_minutes is not None else None), "now": now},
 		)
 
 
@@ -267,11 +269,29 @@ def fetch_recent_runs(limit: int = 50, job_id: str | None = None) -> List[Tuple]
 
 
 def fetch_jobs() -> List[Tuple[str, str, str, str, str, str]]:
-	"""Return (id, name, input_dir, md_out_dir, created_at, updated_at)."""
+	"""Return (id, name, input_dir, md_out_dir, created_at, updated_at, sla_minutes)."""
 	engine = get_engine()
 	with engine.begin() as conn:
-		rows = conn.execute(text("SELECT id, name, input_dir, md_out_dir, created_at, updated_at FROM jobs ORDER BY updated_at DESC"))
+		rows = conn.execute(text("SELECT id, name, input_dir, md_out_dir, created_at, updated_at, sla_minutes FROM jobs ORDER BY updated_at DESC"))
 		return [tuple(r) for r in rows]
+
+
+def fetch_last_success(job_id: str) -> str | None:
+	"""Return ISO timestamp of last successful run for a job, if any."""
+	engine = get_engine()
+	with engine.begin() as conn:
+		row = conn.execute(text("SELECT started_at FROM job_runs WHERE job_id=:jid AND status='success' ORDER BY started_at DESC LIMIT 1"), {"jid": job_id}).fetchone()
+		return str(row[0]) if row else None
+
+
+def fetch_job_sla(job_id: str) -> int | None:
+	engine = get_engine()
+	with engine.begin() as conn:
+		row = conn.execute(text("SELECT sla_minutes FROM jobs WHERE id=:id"), {"id": job_id}).fetchone()
+		try:
+			return int(row[0]) if row and row[0] is not None else None
+		except Exception:
+			return None
 
 
 def compute_hash(content: str) -> str:
