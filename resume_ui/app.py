@@ -121,7 +121,6 @@ with st.sidebar:
     )
     # persist settings so search uses the same caps/encoding
     st.session_state["max_tokens_config"] = int(max_tokens or 0)
-    st.session_state["encoding_name"] = encoding_name
     # moved include_kb next to build controls below
     st.divider()
     st.caption("KB search configuration")
