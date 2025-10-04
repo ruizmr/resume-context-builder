@@ -199,3 +199,36 @@ def fetch_chunk_by_id(engine: Engine, chunk_id: int) -> Tuple[int, str, str, str
 		return (row[0], row[1], row[2], row[3]) if row else None
 
 
+
+def factory_reset_db() -> None:
+	"""Dangerous: wipe all KB and scheduler tables and reinitialize schema.
+
+	- For SQLite: delete the DB file under STATE_DIR
+	- For other DBs: DROP known tables and re-create KB schema
+	"""
+	url = get_database_url()
+	try:
+		if url.startswith("sqlite///") or url.startswith("sqlite:///"):
+			# Remove SQLite file and exit early; schema will be re-created lazily on next engine init
+			try:
+				# Expected default path
+				p = (STATE_DIR / 'context.db')
+				if p.exists():
+					p.unlink()
+			except Exception:
+				pass
+			return
+		# Non-SQLite: drop known tables and reinit schema
+		engine = create_engine(url, future=True, pool_pre_ping=True)
+		with engine.begin() as conn:
+			for tbl in ("apscheduler_jobs", "chunks", "file_index"):
+				try:
+					conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
+				except Exception:
+					pass
+		# Recreate KB schema
+		init_schema(engine)
+	except Exception:
+		# Best-effort reset; swallow exceptions to avoid breaking UI
+		return
+

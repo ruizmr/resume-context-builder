@@ -421,36 +421,32 @@ with manage_tab:
     st.divider()
     st.subheader("Enable continuous folder sync")
 
-    # Scheduler controls (uses same DB via SQLAlchemy job store)
-    # Removed custom folder browser; keep simple, clear inputs
-
-    col_a, col_b = st.columns([3, 2])
-    with col_a:
-        sync_folder = st.text_input("Folder to sync", value=st.session_state.get("sync_folder", ""), key="sync_folder", placeholder="/path/to/folder")
-        if sync_folder and not os.path.isdir(sync_folder):
-            st.caption("Invalid folder path")
-        md_out_target = st.text_input("Markdown output dir (optional)", value=st.session_state.get("sync_md_out", st.session_state.get("md_dir", default_md_dir)), key="sync_md_out")
-        if md_out_target and not os.path.isdir(md_out_target):
-            st.caption("Invalid folder path")
-    with col_b:
-        schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Weekly", "Monthly", "Cron (advanced)"], index=0, key="sync_mode")
-        interval_minutes = int(st.number_input("Interval (minutes)", value=int(st.session_state.get("sync_interval", 60)), min_value=1, step=1, key="sync_interval")) if schedule_mode == "Every X minutes" else 1440
-        cron_expr = st.text_input("Cron (min hr dom mon dow)", value=st.session_state.get("sync_cron", "0 2 * * *"), key="sync_cron") if schedule_mode == "Cron (advanced)" else st.session_state.get("sync_cron", "0 2 * * *")
-        if schedule_mode == "Daily":
-            st.time_input("Time of day", value=st.session_state.get("sync_time", dt_time(2, 0)), key="sync_time")
-        elif schedule_mode == "Weekly":
-            days_options = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            st.multiselect("Days of week", options=days_options, default=st.session_state.get("sync_weekdays", ["Mon"]), key="sync_weekdays")
-            st.time_input("Time of day", value=st.session_state.get("sync_time_weekly", dt_time(2, 0)), key="sync_time_weekly")
-        elif schedule_mode == "Monthly":
-            st.number_input("Day of month", min_value=1, max_value=31, value=int(st.session_state.get("sync_dom", 1)), step=1, key="sync_dom")
-            st.time_input("Time of day", value=st.session_state.get("sync_time_monthly", dt_time(2, 0)), key="sync_time_monthly")
-
-    col_btn1, col_btn2 = st.columns([1,1])
-    with col_btn1:
-        add_job = st.button("Add job", use_container_width=True, key="ui_jobs_add_btn")
-    with col_btn2:
-        run_now = st.button("Run now", use_container_width=True, key="ui_jobs_run_now_btn")
+    # Redesigned scheduler: single add-job form + run-now
+    with st.form("add_job_form", clear_on_submit=False):
+        col_a, col_b = st.columns([3, 2])
+        with col_a:
+            sync_folder = st.text_input("Folder to sync", key="sync_folder", placeholder="/path/to/folder")
+            if sync_folder and not os.path.isdir(sync_folder):
+                st.caption("Invalid folder path")
+            md_out_target = st.text_input("Markdown output dir (optional)", key="sync_md_out")
+            if md_out_target and not os.path.isdir(md_out_target):
+                st.caption("Invalid folder path")
+        with col_b:
+            schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Weekly", "Monthly", "Cron (advanced)"], key="sync_mode")
+            interval_minutes = int(st.number_input("Interval (minutes)", min_value=1, step=1, key="sync_interval")) if schedule_mode == "Every X minutes" else 1440
+            cron_expr = st.text_input("Cron (min hr dom mon dow)", key="sync_cron") if schedule_mode == "Cron (advanced)" else st.session_state.get("sync_cron", "0 2 * * *")
+            if schedule_mode == "Daily":
+                st.time_input("Time of day", key="sync_time")
+            elif schedule_mode == "Weekly":
+                days_options = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                st.multiselect("Days of week", options=days_options, key="sync_weekdays")
+                st.time_input("Time of day", key="sync_time_weekly")
+            elif schedule_mode == "Monthly":
+                st.number_input("Day of month", min_value=1, max_value=31, step=1, key="sync_dom")
+                st.time_input("Time of day", key="sync_time_monthly")
+        col1, col2 = st.columns([1,1])
+        add_job_submit = col1.form_submit_button("Add job", use_container_width=True)
+        run_now_submit = col2.form_submit_button("Run now", use_container_width=True)
 
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.executors.pool import ThreadPoolExecutor
@@ -472,7 +468,7 @@ with manage_tab:
             st.session_state["ui_scheduler"].start()
 
     job_id = "ui_continuous_sync"
-    if add_job:
+    if add_job_submit:
         try:
             _ensure_sched_started()
             sched = st.session_state["ui_scheduler"]
@@ -511,7 +507,7 @@ with manage_tab:
         except Exception as e:
             st.error(f"Failed to start: {e}")
 
-    if run_now:
+    if run_now_submit:
         try:
             in_dir = sync_folder.strip()
             if not in_dir or not os.path.isdir(in_dir):
@@ -625,16 +621,16 @@ with manage_tab:
     # Controls
     colf, colp, colr = st.columns([4, 1, 1])
     with colf:
-        filter_text = st.text_input("Filter (path, name, or content)", value=st.session_state.get("kb_m_filter", ""), key="kb_m_filter")
+        filter_text = st.text_input("Filter (path, name, or content)", key="kb_m_filter")
     with colp:
-        rows_per_page = st.number_input("Rows/page", min_value=5, max_value=200, value=int(st.session_state.get("kb_m_rpp", 25)), step=5, key="kb_m_rpp")
+        rows_per_page = st.number_input("Rows/page", min_value=5, max_value=200, step=5, key="kb_m_rpp")
     with colr:
         if "kb_m_page" not in st.session_state:
             st.session_state["kb_m_page"] = 1
         page = st.number_input("Page", min_value=1, value=int(st.session_state["kb_m_page"]), step=1)
         st.session_state["kb_m_page"] = int(page)
 
-    like = f"%{filter_text}%" if filter_text else None
+    like = f"%{st.session_state.get('kb_m_filter','')}%" if st.session_state.get('kb_m_filter') else None
     total = count_chunks(engine, like)
     max_page = max(1, (total + int(rows_per_page) - 1) // int(rows_per_page))
     st.caption(f"{total} item(s) — page {st.session_state['kb_m_page']} of {max_page}")
@@ -706,6 +702,16 @@ with manage_tab:
         except Exception as e:
             st.error(f"Delete failed: {e}")
 
- # legacy bottom search removed in favor of the top search bar
-
- # legacy bottom search removed in favor of the top search bar
+    st.divider()
+    st.subheader("Danger zone")
+    st.caption("Factory reset DB: wipes jobs and KB tables. This cannot be undone.")
+    with st.form("factory_reset_form", clear_on_submit=False):
+        confirm = st.text_input("Type RESET to confirm", key="factory_reset_confirm")
+        do_reset = st.form_submit_button("Factory reset DB", disabled=(confirm.strip().upper() != "RESET"))
+    if do_reset:
+        try:
+            from kb.db import factory_reset_db
+            factory_reset_db()
+            st.success("Database reset complete")
+        except Exception as e:
+            st.error(f"Reset failed: {e}")
