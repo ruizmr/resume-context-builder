@@ -107,19 +107,19 @@ def upsert_markdown_files(
 ) -> int:
 	engine = get_engine()
 	records: List[Tuple[str, str, str]] = []
-    total = len(md_files)
-    for idx, md in enumerate(md_files):
-        if cancel_cb is not None:
-            try:
-                if cancel_cb():
-                    break
-            except Exception:
-                pass
-        if progress_cb is not None:
-            try:
-                progress_cb(idx + 1, total, md)
-            except Exception:
-                pass
+	total = len(md_files)
+	for idx, md in enumerate(md_files):
+		if cancel_cb is not None:
+			try:
+				if cancel_cb():
+					break
+			except Exception:
+				pass
+		if progress_cb is not None:
+			try:
+				progress_cb(idx + 1, total, md)
+			except Exception:
+				pass
 		try:
 			content = md.read_text(encoding="utf-8")
 			# Compute file-level hash and params signature to skip unchanged
@@ -151,6 +151,6 @@ def upsert_markdown_files(
 			continue
 	if records:
 		upsert_chunks(engine, records)
-    return len(records)
+	return len(records)
 
 
