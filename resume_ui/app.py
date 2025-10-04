@@ -40,6 +40,54 @@ if "instruction_file" not in st.session_state:
 
 # Reusable copy widget
 
+with st.sidebar:
+    st.header("Settings")
+    md_dir = st.text_input("Markdown output directory", value=default_md_dir)
+    output_file = st.text_input("Context output file", value=default_out_file)
+    attach_instructions = st.checkbox("Attach instructions", value=True)
+    instruction_file = st.text_input("Instructions file (Markdown)", value=st.session_state.get("instruction_file", default_instr))
+    header_text = st.text_input("Document header", value="Context Pack")
+    max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
+    encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
+    # persist settings so search uses the same caps/encoding
+    st.session_state["max_tokens_config"] = int(max_tokens or 0)
+    st.session_state["encoding_name"] = encoding_name
+    # moved include_kb next to build controls below
+    st.divider()
+    st.caption("KB search configuration")
+    kb_top_k = st.number_input("Max results", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
+    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, value=0.0, step=0.01, key="kb_min_score")
+
+    st.divider()
+    st.caption("Instructions (optional)")
+
+    @st.dialog("Edit instructions")
+    def edit_instructions_dialog():
+        current_path = st.session_state.get("instruction_file") or default_instr or str(Path.home() / "instruction.md")
+        try:
+            default_text = Path(current_path).read_text(encoding="utf-8") if current_path and os.path.isfile(current_path) else ""
+        except Exception:
+            default_text = ""
+        new_path = st.text_input("Save as", value=str(current_path))
+        text = st.text_area("Instructions (Markdown)", value=default_text, height=300)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Save", use_container_width=True):
+                try:
+                    p = Path(new_path).expanduser().resolve()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(text or "", encoding="utf-8")
+                    st.session_state["instruction_file"] = str(p)
+                    st.success(f"Saved to {p}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save: {e}")
+        with col_b:
+            st.button("Cancel", use_container_width=True)
+
+    if st.button("Edit instructions", use_container_width=True):
+        edit_instructions_dialog()
+
 def render_copy_button(label: str, text: str, height: int = 110):
     b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
     tmpl = """
@@ -352,54 +400,6 @@ with manage_tab:
             st.rerun()
         except Exception as e:
             st.error(f"Delete failed: {e}")
-
-with st.sidebar:
-    st.header("Settings")
-    md_dir = st.text_input("Markdown output directory", value=default_md_dir)
-    output_file = st.text_input("Context output file", value=default_out_file)
-    attach_instructions = st.checkbox("Attach instructions", value=True)
-    instruction_file = st.text_input("Instructions file (Markdown)", value=st.session_state.get("instruction_file", default_instr))
-    header_text = st.text_input("Document header", value="Context Pack")
-    max_tokens = st.number_input("Max tokens per chunk (0 = no split)", value=120000, min_value=0, step=1000)
-    encoding_name = st.selectbox("Tokenizer", options=["o200k_base", "cl100k_base"], index=0)
-    # persist settings so search uses the same caps/encoding
-    st.session_state["max_tokens_config"] = int(max_tokens or 0)
-    st.session_state["encoding_name"] = encoding_name
-    # moved include_kb next to build controls below
-    st.divider()
-    st.caption("KB search configuration")
-    kb_top_k = st.number_input("Max results", value=5, min_value=1, max_value=50, step=1, key="kb_top_k")
-    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, value=0.0, step=0.01, key="kb_min_score")
-
-    st.divider()
-    st.caption("Instructions (optional)")
-
-    @st.dialog("Edit instructions")
-    def edit_instructions_dialog():
-        current_path = st.session_state.get("instruction_file") or default_instr or str(Path.home() / "instruction.md")
-        try:
-            default_text = Path(current_path).read_text(encoding="utf-8") if current_path and os.path.isfile(current_path) else ""
-        except Exception:
-            default_text = ""
-        new_path = st.text_input("Save as", value=str(current_path))
-        text = st.text_area("Instructions (Markdown)", value=default_text, height=300)
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("Save", use_container_width=True):
-                try:
-                    p = Path(new_path).expanduser().resolve()
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(text or "", encoding="utf-8")
-                    st.session_state["instruction_file"] = str(p)
-                    st.success(f"Saved to {p}")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to save: {e}")
-        with col_b:
-            st.button("Cancel", use_container_width=True)
-
-    if st.button("Edit instructions", use_container_width=True):
-        edit_instructions_dialog()
 
  # legacy bottom search removed in favor of the top search bar
 
