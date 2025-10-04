@@ -455,6 +455,7 @@ with manage_tab:
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.date import DateTrigger
     from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
+    from kb.db import ensure_job, fetch_recent_runs, request_cancel_run
 
     def _get_scheduler():
         jobstores = {'default': SQLAlchemyJobStore(url=get_database_url())}
@@ -502,7 +503,8 @@ with manage_tab:
                 base = Path(in_dir).name or "folder"
                 jid = f"sync::{hashlib.sha1(in_dir.encode('utf-8')).hexdigest()[:8]}::{base}"
                 jname = f"{base} — {human_sched}"
-                sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None], trigger=trigger, replace_existing=True)
+                ensure_job(jid, jname, in_dir, md_out_target or None)
+                sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None, jid, jname], trigger=trigger, replace_existing=True)
                 st.success("Continuous sync enabled")
         except Exception as e:
             st.error(f"Failed to start: {e}")
@@ -516,7 +518,8 @@ with manage_tab:
                 _ensure_sched_started()
                 sched = st.session_state["ui_scheduler"]
                 jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
-                sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None)
+                sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None, jid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
                 st.success("Queued run in background")
         except Exception as e:
             st.error(f"Run failed: {e}")
@@ -564,6 +567,22 @@ with manage_tab:
                         st.info("No jobs removed")
                 if run_pressed:
                     queued = 0
+                    for jid in list(selected_jobs):
+                        try:
+                            j = sched.get_job(jid)
+                            if j and j.args and isinstance(j.args[0], str):
+                                in_dir = j.args[0]
+                                out_dir = j.args[1] if len(j.args) > 1 else None
+                                rqid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
+                                ensure_job(rqid, f"One-off run — {Path(in_dir).name}", in_dir, out_dir)
+                                sched.add_job(_job_ingest_fn, id=rqid, args=[in_dir, out_dir, rqid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                                queued += 1
+                        except Exception:
+                            pass
+                    if queued > 0:
+                        st.success(f"Queued {queued} job(s)")
+                    else:
+                        st.info("No jobs queued")
                 if purge_pressed:
                     try:
                         for jid in list(options):
@@ -574,27 +593,46 @@ with manage_tab:
                         st.success("Purged all jobs")
                     except Exception as e:
                         st.error(f"Failed to purge: {e}")
-                    for jid in list(selected_jobs):
-                        try:
-                            j = sched.get_job(jid)
-                            if j and j.args and isinstance(j.args[0], str):
-                                in_dir = j.args[0]
-                                out_dir = j.args[1] if len(j.args) > 1 else None
-                                rqid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
-                                sched.add_job(_job_ingest_fn, id=rqid, args=[in_dir, out_dir], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
-                                queued += 1
-                        except Exception:
-                            pass
-                    if queued > 0:
-                        st.success(f"Queued {queued} job(s)")
-                    else:
-                        st.info("No jobs queued")
     except Exception as e:
         st.error(f"Failed to list/remove jobs: {e}")
 
     # Removed single remove button; handled via multiselect above
 
     st.divider()
+    st.subheader("Recent runs")
+    if st.button("Refresh", use_container_width=False):
+        st.rerun()
+    try:
+        runs = fetch_recent_runs(limit=20)
+        if not runs:
+            st.caption("No runs yet")
+        else:
+            for rid, jid, in_dir, out_dir, status, progress, processed, total, chunks, started_at, finished_at, last_msg, log_tail, cancel_req, err in runs:
+                with st.container():
+                    st.markdown(f"**{status.upper()}** — {progress}% — {Path(in_dir).name}  ")
+                    st.caption(f"Run {rid} — job {jid or '-'} — started {started_at}{' — finished ' + str(finished_at) if finished_at else ''}")
+                    cols = st.columns([3,1,1])
+                    with cols[0]:
+                        st.progress(int(progress or 0), text=last_msg or "")
+                        if log_tail:
+                            with st.expander("View recent log"):
+                                st.code(str(log_tail))
+                    with cols[1]:
+                        if status in ("running", "queued") and not cancel_req:
+                            if st.button("Cancel", key=f"cancel_{rid}", use_container_width=True):
+                                try:
+                                    request_cancel_run(rid)
+                                    st.success("Cancellation requested")
+                                except Exception as e:
+                                    st.error(f"Cancel failed: {e}")
+                    with cols[2]:
+                        st.caption(f"Files {processed}/{total}")
+                        if chunks is not None:
+                            st.caption(f"Chunks {int(chunks)}")
+                        if err:
+                            st.caption(f"Error: {err}")
+    except Exception as e:
+        st.error(f"Failed to load runs: {e}")
     st.subheader("Edit and delete knowledge")
 
     def _friendly_title(path: str, chunk_name: str, content: str) -> str:
