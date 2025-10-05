@@ -44,7 +44,7 @@ def main() -> None:
 	"""Launch the Streamlit UI on an available localhost port and open the browser."""
 	app_path = Path(__file__).parent / "app.py"
 	preferred_port_env = os.getenv("RESUME_UI_PORT")
-	address = os.getenv("RESUME_UI_ADDR", "127.0.0.1")
+	address = "127.0.0.1"
 	preferred_port = int(preferred_port_env) if preferred_port_env and preferred_port_env.isdigit() else 8501
 	port = _pick_port(address, preferred_port)
 
