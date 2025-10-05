@@ -88,6 +88,18 @@ def init_schema(engine: Engine) -> None:
 				"""
 			)
 		)
+		# Backfill migration: ensure sla_minutes column exists on older DBs
+		try:
+			if engine.dialect.name == "sqlite":
+				rows = conn.execute(text("PRAGMA table_info(jobs)")).fetchall()
+				cols = [r[1] for r in rows]
+				if "sla_minutes" not in cols:
+					conn.execute(text("ALTER TABLE jobs ADD COLUMN sla_minutes INTEGER"))
+			else:
+				# Best-effort for other dialects
+				conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS sla_minutes INTEGER"))
+		except Exception:
+			pass
 		# Per-run tracking for progress/logs/history
 		conn.execute(
 			text(
