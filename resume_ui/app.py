@@ -496,20 +496,27 @@ with manage_tab:
             else:
                 trigger = CronTrigger.from_crontab(str(cron_expr))
                 human_sched = f"Cron: {cron_expr}"
-            # Compute implied SLA in minutes based on selected schedule
+            # Compute implied SLA = one schedule period + 1 minute (n + 1)
             implied_sla_min = None
             try:
-                if schedule_mode == "Every X minutes":
-                    implied_sla_min = int(interval_minutes) * 2
-                elif schedule_mode == "Daily":
-                    implied_sla_min = 36 * 60  # 1.5 days
-                elif schedule_mode == "Weekly":
-                    implied_sla_min = 10 * 24 * 60  # ~1.5 weeks
-                elif schedule_mode == "Monthly":
-                    implied_sla_min = 45 * 24 * 60  # ~1.5 months
-                else:
-                    # Cron (advanced): default to two periods if we can parse minutes; else None
-                    implied_sla_min = None
+                period_min = None
+                # IntervalTrigger exposes .interval (timedelta)
+                if trigger is not None and hasattr(trigger, "interval") and getattr(trigger, "interval", None) is not None:
+                    try:
+                        period_min = int(max(1, int(getattr(trigger, "interval").total_seconds() // 60)))
+                    except Exception:
+                        period_min = None
+                # CronTrigger: derive by computing two consecutive fire times
+                if period_min is None and trigger is not None and hasattr(trigger, "get_next_fire_time"):
+                    now_ts = datetime.now(timezone.utc)
+                    next1 = trigger.get_next_fire_time(None, now_ts)
+                    if next1 is not None:
+                        next2 = trigger.get_next_fire_time(next1, next1)
+                        if next2 is not None:
+                            delta_s = (next2 - next1).total_seconds()
+                            period_min = int(max(1, int((delta_s + 59) // 60)))
+                if period_min is not None:
+                    implied_sla_min = int(period_min + 1)
             except Exception:
                 implied_sla_min = None
 
