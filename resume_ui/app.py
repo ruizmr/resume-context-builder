@@ -496,29 +496,8 @@ with manage_tab:
             else:
                 trigger = CronTrigger.from_crontab(str(cron_expr))
                 human_sched = f"Cron: {cron_expr}"
-            # Compute implied SLA = one schedule period + 1 minute (n + 1)
-            implied_sla_min = None
-            try:
-                period_min = None
-                # IntervalTrigger exposes .interval (timedelta)
-                if trigger is not None and hasattr(trigger, "interval") and getattr(trigger, "interval", None) is not None:
-                    try:
-                        period_min = int(max(1, int(getattr(trigger, "interval").total_seconds() // 60)))
-                    except Exception:
-                        period_min = None
-                # CronTrigger: derive by computing two consecutive fire times
-                if period_min is None and trigger is not None and hasattr(trigger, "get_next_fire_time"):
-                    now_ts = datetime.now(timezone.utc)
-                    next1 = trigger.get_next_fire_time(None, now_ts)
-                    if next1 is not None:
-                        next2 = trigger.get_next_fire_time(next1, next1)
-                        if next2 is not None:
-                            delta_s = (next2 - next1).total_seconds()
-                            period_min = int(max(1, int((delta_s + 59) // 60)))
-                if period_min is not None:
-                    implied_sla_min = int(period_min + 1)
-            except Exception:
-                implied_sla_min = None
+            # Implied SLA fixed to 5 minutes
+            implied_sla_min = 5
 
             in_dir = sync_folder.strip()
             if not in_dir:
