@@ -102,7 +102,7 @@ _defaults_map = {
     "max_tokens": 120000,
     "encoding_name": "o200k_base",
     "kb_top_k": 5,
-    "kb_min_score": 0.1,
+    "kb_min_score": 0.005,
     "kb_neighbors": 0,
     "kb_sequence": True,
     "kb_use_ann": True,
@@ -270,7 +270,7 @@ with home_tab:
                 else:
                     searcher = st.session_state["kb_searcher"]
                 top_k = int(st.session_state.get("kb_top_k", 5))
-                min_score = float(st.session_state.get("kb_min_score", 0.0))
+                min_score = float(st.session_state.get("kb_min_score", 0.005))
                 results = searcher.search(
                     st.session_state["q_top"],
                     top_k=top_k,
