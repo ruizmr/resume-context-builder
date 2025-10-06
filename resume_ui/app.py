@@ -367,7 +367,7 @@ with home_tab:
                 else:
                     sections = []
                     for cid, score, path, cname, snippet, full_text in results:
-                        header = f"{path} :: {cname} — score {score:.3f}"
+                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
                         sections.append(f"{header}\n\n{full_text.strip()}")
                     aggregated = "\n\n---\n\n".join(sections)
 
@@ -398,10 +398,11 @@ with home_tab:
             # Collapsible, scrollable panels per result for better UX
             results_list = st.session_state.get("kb_results_list") or []
             if results_list:
-                for cid, score, path, cname, snippet, full_text in results_list:
-                    header = f"{path} :: {cname} — score {score:.3f}"
-                    with st.expander(header, expanded=False):
-                        st.markdown(full_text)
+                for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
+                    header = f"{path} :: {cname} — relevancy score {score:.3f}"
+                    with st.expander(header, expanded=(i == 0)):
+                        # Ensure the first line inside content includes original file path and relevancy score
+                        st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
             else:
                 # Fallback to aggregated rendering
                 st.markdown(st.session_state["kb_results_agg"])
