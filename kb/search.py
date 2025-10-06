@@ -131,6 +131,7 @@ class HybridSearcher:
 		phrase_boost: float = 0.1,
 		enable_rare_term_filter: bool = True,
 		rare_idf_threshold: float = 3.0,
+		min_score: float | None = None,
 	) -> List[Tuple[int, float, str, str, str, str]]:
 		"""Return (id, score, path, chunk_name, snippet, full_text)."""
 		if not self.texts:
@@ -433,6 +434,9 @@ class HybridSearcher:
 				score = float(final_scores[cand_pos])
 			except Exception:
 				score = float(all_scores[idx])
+			# Enforce minimum score if provided
+			if min_score is not None and score < float(min_score):
+				continue
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
 			text = self.texts[idx]

@@ -282,13 +282,14 @@ with home_tab:
                     lsa_weight=float(st.session_state.get("kb_lsa_weight", 0.2)),
                     tfidf_metric=str(st.session_state.get("kb_tfidf_metric", "cosine")),
                     ann_weight=float(st.session_state.get("kb_ann_weight", 0.0)),
+                    min_score=float(min_score),
                     mmr_diversify=bool(st.session_state.get("kb_mmr_diversify", True)),
                     mmr_lambda=float(st.session_state.get("kb_mmr_lambda", 0.2)),
                     phrase_boost=float(st.session_state.get("kb_phrase_boost", 0.1)),
                     enable_rare_term_filter=bool(st.session_state.get("kb_enable_rare_filter", True)),
                     rare_idf_threshold=float(st.session_state.get("kb_rare_idf_threshold", 3.0)),
                 )
-                # filter by minimum score
+                # filter by minimum score (defensive: UI also enforces inside searcher)
                 results = [r for r in results if r[1] >= min_score]
 
                 if not results:
