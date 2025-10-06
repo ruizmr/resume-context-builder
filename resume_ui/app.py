@@ -2,6 +2,7 @@ import os
 import hashlib
 import base64
 import zipfile
+import shutil
 import json
 import uuid
 from pathlib import Path
@@ -36,6 +37,64 @@ except Exception:
 
 uploads_root = str(Path.home() / ".context-packager-uploads")
 Path(uploads_root).mkdir(parents=True, exist_ok=True)
+
+
+# Upload safety limits
+MAX_UPLOAD_FILE_BYTES = 32 * 1024 * 1024  # 32MB per file
+MAX_ZIP_FILES = 2000
+MAX_ZIP_TOTAL_BYTES = 200 * 1024 * 1024  # 200MB cumulative uncompressed
+
+
+def _is_within_directory(base: Path, target: Path) -> bool:
+    try:
+        base = base.resolve()
+        target = target.resolve()
+        return os.path.commonpath([str(base), str(target)]) == str(base)
+    except Exception:
+        return False
+
+
+def _safe_extract_zip(zip_path: Path, target_dir: Path) -> int:
+    extracted = 0
+    total_bytes = 0
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(str(zip_path), "r") as zf:
+            for info in zf.infolist():
+                # Skip directories
+                if getattr(info, "is_dir", None) and info.is_dir():
+                    continue
+                # Basic filename sanitation
+                member = info.filename or ""
+                if not member or member.endswith("/"):
+                    continue
+                # Per-file size cap
+                if getattr(info, "file_size", 0) > MAX_UPLOAD_FILE_BYTES:
+                    continue
+                # Cumulative size cap
+                nxt = total_bytes + int(getattr(info, "file_size", 0) or 0)
+                if nxt > MAX_ZIP_TOTAL_BYTES:
+                    break
+                # Path traversal guard
+                dest = (target_dir / member)
+                if not _is_within_directory(target_dir, dest):
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # Extract safely
+                with zf.open(info, "r") as src, open(dest, "wb") as out:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                total_bytes = nxt
+                extracted += 1
+                if extracted >= MAX_ZIP_FILES:
+                    break
+    except Exception:
+        # Best-effort: partial extraction allowed, caller handles missing files
+        pass
+    return extracted
 
 
 # Persistent settings
@@ -359,26 +418,43 @@ with home_tab:
 
     if start:
         effective_input_dir = None
-        if uploaded_files:
-            temp_root = Path(uploads_root) / f"session-{uuid.uuid4().hex[:8]}"
-            temp_root.mkdir(parents=True, exist_ok=True)
-            combined_dir = temp_root / "combined"
-            combined_dir.mkdir(parents=True, exist_ok=True)
-            for f in uploaded_files:
-                name = Path(f.name).name
-                if name.lower().endswith(".zip"):
-                    zip_path = temp_root / name
-                    zip_path.write_bytes(f.read())
-                    with zipfile.ZipFile(zip_path, "r") as zf:
-                        zf.extractall(combined_dir)
-                else:
-                    (combined_dir / name).write_bytes(f.read())
-            effective_input_dir = str(combined_dir.resolve())
-        elif fallback_dir_main and os.path.isdir(fallback_dir_main):
-            effective_input_dir = fallback_dir_main
-        else:
-            st.error("Please upload files/ZIP or provide a valid directory path.")
-            st.stop()
+        _temp_root: Path | None = None
+        try:
+            if uploaded_files:
+                _temp_root = Path(uploads_root) / f"session-{uuid.uuid4().hex[:8]}"
+                _temp_root.mkdir(parents=True, exist_ok=True)
+                combined_dir = _temp_root / "combined"
+                combined_dir.mkdir(parents=True, exist_ok=True)
+                total_uploaded = 0
+                files_written = 0
+                for f in uploaded_files:
+                    name = Path(f.name).name
+                    raw = f.read() if not name.lower().endswith(".zip") else None
+                    if raw is not None:
+                        # Per-file size limit
+                        if len(raw) > MAX_UPLOAD_FILE_BYTES:
+                            st.warning(f"Skipping {name}: file too large")
+                            continue
+                        total_uploaded += len(raw)
+                        if total_uploaded > MAX_ZIP_TOTAL_BYTES:
+                            st.warning("Upload total size exceeded limit; skipping remaining files")
+                            break
+                    if name.lower().endswith(".zip"):
+                        zip_path = _temp_root / name
+                        zip_path.write_bytes(f.read())
+                        _ = _safe_extract_zip(zip_path, combined_dir)
+                    else:
+                        (combined_dir / name).write_bytes(raw or b"")
+                    files_written += 1
+                if files_written == 0:
+                    st.error("No acceptable files were uploaded (size/type limits)")
+                    st.stop()
+                effective_input_dir = str(combined_dir.resolve())
+            elif fallback_dir_main and os.path.isdir(fallback_dir_main):
+                effective_input_dir = fallback_dir_main
+            else:
+                st.error("Please upload files/ZIP or provide a valid directory path.")
+                st.stop()
 
         Path(md_dir).mkdir(parents=True, exist_ok=True)
         Path(Path(output_file).parent).mkdir(parents=True, exist_ok=True)
@@ -447,6 +523,12 @@ with home_tab:
             st.write("Generated chunks (tokens):")
             for p, tok in rows:
                 st.write(f"{p} — tokens: {tok}")
+        # Cleanup temporary upload directory
+        try:
+            if _temp_root and _temp_root.exists():
+                shutil.rmtree(_temp_root, ignore_errors=True)
+        except Exception:
+            pass
 
     if "out_paths" in st.session_state and st.session_state["out_paths"]:
         st.subheader("Context preview")
