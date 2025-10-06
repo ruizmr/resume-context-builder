@@ -58,7 +58,7 @@ def main() -> None:
 		str(port),
 		"--server.address",
 		str(address),
-		"--server.headless=false",
+		"--server.headless=true",
 	]
 
 	env = os.environ.copy()
@@ -72,7 +72,7 @@ def main() -> None:
 			pass
 		print(f"Resume UI is running at {url}")
 	else:
-		print(f"Starting server on {url} (browser may open when ready)...")
+		print(f"Starting server on {url}...")
 
 	try:
 		proc.wait()

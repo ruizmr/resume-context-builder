@@ -40,7 +40,7 @@ Path(uploads_root).mkdir(parents=True, exist_ok=True)
 
 
 # Upload safety limits
-MAX_UPLOAD_FILE_BYTES = 32 * 1024 * 1024  # 32MB per file
+MAX_UPLOAD_FILE_BYTES = 512 * 1024 * 1024  # 512MB per file
 MAX_ZIP_FILES = 2000
 MAX_ZIP_TOTAL_BYTES = 200 * 1024 * 1024  # 200MB cumulative uncompressed
 
