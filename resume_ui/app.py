@@ -394,15 +394,44 @@ with home_tab:
     if "kb_results_agg" in st.session_state and st.session_state["kb_results_agg"] is not None:
         if st.session_state["kb_results_agg"]:
             st.subheader("Search results")
-            render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
-            # Collapsible, scrollable panels per result for better UX
+            # Collapsible, scrollable panels per result with selection checkboxes
             results_list = st.session_state.get("kb_results_list") or []
+            selected_map = st.session_state.get("kb_results_selected") or {}
             if results_list:
                 for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
-                    header = f"{path} :: {cname} — relevancy score {score:.3f}"
-                    with st.expander(header, expanded=(i == 0)):
-                        # Ensure the first line inside content includes original file path and relevancy score
-                        st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
+                    cols = st.columns([1, 24])
+                    with cols[0]:
+                        sel = st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}")
+                        selected_map[cid] = bool(sel)
+                    with cols[1]:
+                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
+                        with st.expander(header, expanded=(i == 0)):
+                            st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
+                # Persist selection state
+                st.session_state["kb_results_selected"] = dict(selected_map)
+                # Build aggregated text from only selected items
+                selected_results = [r for r in results_list if selected_map.get(r[0], True)]
+                if selected_results:
+                    sections = []
+                    for cid, score, path, cname, snippet, full_text in selected_results:
+                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
+                        sections.append(f"{header}\n\n{full_text.strip()}")
+                    aggregated_sel = "\n\n---\n\n".join(sections)
+                    # Enforce token cap similar to packaging
+                    try:
+                        max_tok = int(st.session_state.get("max_tokens_config") or 0)
+                        enc_name = st.session_state.get("encoding_name", "o200k_base")
+                        if max_tok and max_tok > 0:
+                            enc = tiktoken.get_encoding(enc_name)
+                            toks = enc.encode(aggregated_sel)
+                            if len(toks) > max_tok:
+                                aggregated_sel = enc.decode(toks[:max_tok])
+                    except Exception:
+                        pass
+                else:
+                    aggregated_sel = ""
+                # Copy selected
+                render_copy_button("Copy all results", aggregated_sel, height=80)
             else:
                 # Fallback to aggregated rendering
                 st.markdown(st.session_state["kb_results_agg"])
