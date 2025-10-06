@@ -8,6 +8,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from sklearn.decomposition import TruncatedSVD
+from kb.db import get_engine, persist_chunk_vectors, fetch_all_chunks, fetch_chunk_vectors
 
 try:
     import hnswlib  # type: ignore
@@ -53,6 +54,8 @@ class HybridSearcher:
 		self.hnsw_dim: int = 0
 		# Map of file path -> list of matrix indices ordered by chunk number
 		self.path_to_ordered_indices: Dict[str, List[int]] = {}
+		# Cache settings
+		self.max_pgvector_cache: int = 10000  # max vectors to hydrate from DB on fit
 
 	def fit(self, docs: List[Tuple[int, str, str, str]]):
 		# docs: (id, path, chunk_name, content)
@@ -88,13 +91,32 @@ class HybridSearcher:
 			self.path_to_ordered_indices = {
 				p: [mi for _, mi in sorted(pairs, key=lambda x: x[0])] for p, pairs in order_map.items()
 			}
+			# Try to hydrate SVD vectors from pgvector if Postgres available
+			engine = get_engine()
+			pgvec: Dict[int, List[float]] = {}
+			try:
+				if engine.dialect.name == "postgresql" and len(self.ids) <= int(max(1, self.max_pgvector_cache)):
+					pg = fetch_chunk_vectors(engine, self.ids)
+					if pg:
+						pgvec = {cid: vec for cid, vec in pg.items() if vec}
+			except Exception:
+				pgvec = {}
 			# Build HNSW if available and enough docs
 			if hnswlib is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
 				# Choose a safe number of components
 				n_comp = min(256, max(16, min(self.matrix.shape[0] - 1, self.matrix.shape[1] - 1)))
 				try:
 					self.svd = TruncatedSVD(n_components=n_comp, random_state=42)
-					doc_vecs = self.svd.fit_transform(self.matrix).astype(np.float32, copy=False)
+					if len(pgvec) == len(self.ids):
+						# Use hydrated vectors (assumed same dimensionality); if mismatch, fallback to fit
+						try:
+							doc_vecs = np.array([pgvec.get(cid, []) for cid in self.ids], dtype=np.float32)
+							if doc_vecs.ndim != 2 or doc_vecs.shape[1] != n_comp:
+								raise ValueError("pgvector dim mismatch")
+						except Exception:
+							doc_vecs = self.svd.fit_transform(self.matrix).astype(np.float32, copy=False)
+					else:
+						doc_vecs = self.svd.fit_transform(self.matrix).astype(np.float32, copy=False)
 					# L2-normalize SVD vectors to make cosine distances meaningful
 					norms = np.linalg.norm(doc_vecs, axis=1, keepdims=True)
 					norms[norms == 0] = 1.0
@@ -111,6 +133,16 @@ class HybridSearcher:
 					self.svd = None
 					self.doc_vectors_reduced = None
 					self.hnsw_index = None
+			# Persist vectors to pgvector (best-effort) when Postgres present
+			try:
+				if engine.dialect.name == "postgresql" and self.doc_vectors_reduced is not None:
+					rows: List[Tuple[int, List[float]]] = []
+					for i, cid in enumerate(self.ids):
+						vec = self.doc_vectors_reduced[i].astype(np.float32).tolist()
+						rows.append((int(cid), vec))
+					persist_chunk_vectors(engine, rows)
+			except Exception:
+				pass
 
 	def search(
 		self,

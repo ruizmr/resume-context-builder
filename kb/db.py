@@ -2,7 +2,7 @@ import os
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Dict
 
 from sqlalchemy import (
 	create_engine,
@@ -10,6 +10,7 @@ from sqlalchemy import (
 	Engine,
 )
 import uuid
+from datetime import datetime
 
 
 STATE_DIR = Path.home() / ".context-packager-state"
@@ -131,6 +132,23 @@ def init_schema(engine: Engine) -> None:
 				"""
 			)
 		)
+		# Prepare pgvector schema if available (best-effort, Postgres only)
+		try:
+			if engine.dialect.name == "postgresql":
+				conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+				conn.execute(
+					text(
+						"""
+						CREATE TABLE IF NOT EXISTS chunk_vectors (
+							chunk_id BIGINT PRIMARY KEY,
+							svd vector,
+							updated_at TIMESTAMP
+						)
+						"""
+					)
+				)
+		except Exception:
+			pass
 
 
 def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | None, sla_minutes: int | None = None) -> None:
@@ -294,6 +312,104 @@ def fetch_last_success(job_id: str) -> str | None:
 	with engine.begin() as conn:
 		row = conn.execute(text("SELECT started_at FROM job_runs WHERE job_id=:jid AND status='success' ORDER BY started_at DESC LIMIT 1"), {"jid": job_id}).fetchone()
 		return str(row[0]) if row else None
+
+
+def persist_chunk_vectors(engine: Engine, rows: List[Tuple[int, List[float]]]) -> int:
+	"""Persist SVD vectors to Postgres pgvector table.
+
+	- No-op for non-Postgres engines.
+	- Creates extension/table if needed (best-effort).
+	- Upserts by chunk_id.
+	"""
+	if not rows:
+		return 0
+	if engine.dialect.name != "postgresql":
+		return 0
+	# Ensure schema exists
+	with engine.begin() as conn:
+		try:
+			conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+			conn.execute(
+				text(
+					"""
+					CREATE TABLE IF NOT EXISTS chunk_vectors (
+						chunk_id BIGINT PRIMARY KEY,
+						svd vector,
+						updated_at TIMESTAMP
+					)
+					"""
+				)
+			)
+		except Exception:
+			pass
+	# Upsert in batches
+	from math import ceil
+	BATCH = 500
+	updated = 0
+	for i in range(0, len(rows), BATCH):
+		batch = rows[i : i + BATCH]
+		payload = []
+		ts = datetime.utcnow()
+		for cid, vec in batch:
+			# pgvector input literal format: '[v1,v2,...]'
+			literal = "[" + ",".join(f"{float(x):.6f}" for x in (vec or [])) + "]"
+			payload.append({"id": int(cid), "svd": literal, "ts": ts})
+		with engine.begin() as conn:
+			try:
+				conn.execute(
+					text(
+						"""
+						INSERT INTO chunk_vectors(chunk_id, svd, updated_at)
+						VALUES(:id, :svd::vector, :ts)
+						ON CONFLICT (chunk_id) DO UPDATE SET
+							svd = excluded.svd,
+							updated_at = excluded.updated_at
+						"""
+					),
+					payload,
+				)
+				updated += len(batch)
+			except Exception:
+				# continue with best-effort
+				pass
+	return updated
+
+
+def fetch_chunk_vectors(engine: Engine, ids: List[int]) -> Dict[int, List[float]]:
+	"""Fetch SVD vectors from pgvector table for given chunk IDs.
+
+	Returns a mapping chunk_id -> vector (list of floats). No-op for non-Postgres.
+	"""
+	result: Dict[int, List[float]] = {}
+	if not ids:
+		return result
+	if engine.dialect.name != "postgresql":
+		return result
+	# Sanitize and build IN clause
+	safe_ids: List[int] = []
+	for x in ids:
+		try:
+			safe_ids.append(int(x))
+		except Exception:
+			continue
+	if not safe_ids:
+		return result
+	placeholders = ", ".join(str(i) for i in sorted(set(safe_ids)))
+	with engine.begin() as conn:
+		try:
+			rows = conn.execute(text(f"SELECT chunk_id, svd::text FROM chunk_vectors WHERE chunk_id IN ({placeholders})"))
+			for cid, vec_txt in rows:
+				try:
+					s = str(vec_txt or "").strip()
+					if s.startswith("[") and s.endswith("]"):
+						parts = s[1:-1].split(",")
+						vec = [float(p) for p in parts if p.strip()]
+						result[int(cid)] = vec
+				except Exception:
+					continue
+		except Exception:
+			return result
+	return result
 
 
 def fetch_job_sla(job_id: str) -> int | None:
