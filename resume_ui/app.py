@@ -427,7 +427,7 @@ with home_tab:
                 # Copy selected button ABOVE the results list
                 render_copy_button("Copy all results", aggregated_sel, height=80)
 
-                # Now render list with checkboxes and update selection map
+                # Now render list with checkboxes and update selection map (revert to previous full expander per item)
                 for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
                     cols = st.columns([1, 24])
                     with cols[0]:
@@ -435,19 +435,8 @@ with home_tab:
                         selected_map[cid] = bool(sel)
                     with cols[1]:
                         header = f"{path} :: {cname} — relevancy score {score:.3f}"
-                        # Header line
-                        st.markdown(f"**{header}**")
-                        # Preview (first ~3 lines of snippet)
-                        try:
-                            _lines = (snippet or "").strip().splitlines()
-                            preview_text = "\n".join(_lines[:3]).strip()
-                        except Exception:
-                            preview_text = (snippet or "").strip()[:240]
-                        if preview_text:
-                            st.markdown(preview_text)
-                        # Full content in expander
-                        with st.expander("View full", expanded=(i == 0)):
-                            st.markdown(full_text)
+                        with st.expander(header, expanded=(i == 0)):
+                            st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
                 # Persist selection state
                 st.session_state["kb_results_selected"] = dict(selected_map)
             else:
