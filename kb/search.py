@@ -298,6 +298,13 @@ class HybridSearcher:
 			final_scores = final_scores + (w_lsa * lsa_norm)
 		if ann_norm is not None:
 			final_scores = final_scores + (w_ann * ann_norm)
+		# If scores are uniformly low, short-circuit using min_score when provided
+		if min_score is not None:
+			try:
+				if final_scores is None or final_scores.size == 0 or float(np.max(final_scores)) < float(min_score):
+					return []
+			except Exception:
+				pass
 		# Order by fused score (with optional MMR diversification)
 		if mmr_diversify and candidate_idx.shape[0] > 1 and k > 1:
 			try:

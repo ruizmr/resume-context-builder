@@ -289,8 +289,16 @@ with home_tab:
                     enable_rare_term_filter=bool(st.session_state.get("kb_enable_rare_filter", True)),
                     rare_idf_threshold=float(st.session_state.get("kb_rare_idf_threshold", 3.0)),
                 )
-                # filter by minimum score (defensive: UI also enforces inside searcher)
+                # filter by minimum score (defensive)
                 results = [r for r in results if r[1] >= min_score]
+                # Treat as empty if best remaining score is below threshold
+                if results:
+                    try:
+                        best = max(r[1] for r in results)
+                        if best < float(min_score):
+                            results = []
+                    except Exception:
+                        pass
 
                 if not results:
                     st.session_state["kb_results_agg"] = ""
