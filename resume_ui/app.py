@@ -395,8 +395,16 @@ with home_tab:
         if st.session_state["kb_results_agg"]:
             st.subheader("Search results")
             render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
-            # Render aggregated Markdown for readability
-            st.markdown(st.session_state["kb_results_agg"])
+            # Collapsible, scrollable panels per result for better UX
+            results_list = st.session_state.get("kb_results_list") or []
+            if results_list:
+                for cid, score, path, cname, snippet, full_text in results_list:
+                    header = f"{path} :: {cname} — score {score:.3f}"
+                    with st.expander(header, expanded=False):
+                        st.markdown(full_text)
+            else:
+                # Fallback to aggregated rendering
+                st.markdown(st.session_state["kb_results_agg"])
         else:
             st.info("No search results found")
 
@@ -560,8 +568,9 @@ with home_tab:
         with col_cp:
             render_copy_button("Copy to clipboard", selected_content, height=110)
 
-        # Render packaged context as Markdown by default
-        st.markdown(selected_content)
+        # Render packaged context as Markdown in a collapsible panel
+        with st.expander("Preview (Markdown)", expanded=True):
+            st.markdown(selected_content)
 
 with manage_tab:
     st.subheader("Manage knowledge base")
