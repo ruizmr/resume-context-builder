@@ -52,6 +52,17 @@ PERSIST_KEYS = [
     "kb_min_score",
     "kb_neighbors",
     "kb_sequence",
+    "kb_use_ann",
+    "kb_cand_mult",
+    "kb_bm25_weight",
+    "kb_lsa_weight",
+    "kb_tfidf_metric",
+    "kb_ann_weight",
+    "kb_mmr_diversify",
+    "kb_mmr_lambda",
+    "kb_phrase_boost",
+    "kb_enable_rare_filter",
+    "kb_rare_idf_threshold",
 ]
 
 
@@ -91,9 +102,20 @@ _defaults_map = {
     "max_tokens": 120000,
     "encoding_name": "o200k_base",
     "kb_top_k": 5,
-    "kb_min_score": 0.005,
+    "kb_min_score": 0.1,
     "kb_neighbors": 0,
     "kb_sequence": True,
+    "kb_use_ann": True,
+    "kb_cand_mult": 5,
+    "kb_bm25_weight": 0.45,
+    "kb_lsa_weight": 0.2,
+    "kb_tfidf_metric": "cosine",
+    "kb_ann_weight": 0.15,
+    "kb_mmr_diversify": True,
+    "kb_mmr_lambda": 0.2,
+    "kb_phrase_boost": 0.1,
+    "kb_enable_rare_filter": True,
+    "kb_rare_idf_threshold": 3.0,
 }
 for _k, _v in _defaults_map.items():
     if _k not in st.session_state:
@@ -126,6 +148,18 @@ with st.sidebar:
     kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
     kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
     kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
+    # Advanced retrieval tuning
+    kb_use_ann = st.checkbox("Use ANN (HNSW) for candidates", key="kb_use_ann")
+    kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
+    kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
+    kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
+    kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
+    kb_ann_weight = st.slider("ANN (HNSW) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
+    mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
+    mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
+    phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
+    enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
+    rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -242,6 +276,17 @@ with home_tab:
                     top_k=top_k,
                     neighbors=int(st.session_state.get("kb_neighbors", 0)),
                     sequence=bool(st.session_state.get("kb_sequence", True)),
+                    use_ann=bool(st.session_state.get("kb_use_ann", True)),
+                    bm25_weight=float(st.session_state.get("kb_bm25_weight", 0.6)),
+                    cand_multiplier=int(st.session_state.get("kb_cand_mult", 3)),
+                    lsa_weight=float(st.session_state.get("kb_lsa_weight", 0.2)),
+                    tfidf_metric=str(st.session_state.get("kb_tfidf_metric", "cosine")),
+                    ann_weight=float(st.session_state.get("kb_ann_weight", 0.0)),
+                    mmr_diversify=bool(st.session_state.get("kb_mmr_diversify", True)),
+                    mmr_lambda=float(st.session_state.get("kb_mmr_lambda", 0.2)),
+                    phrase_boost=float(st.session_state.get("kb_phrase_boost", 0.1)),
+                    enable_rare_term_filter=bool(st.session_state.get("kb_enable_rare_filter", True)),
+                    rare_idf_threshold=float(st.session_state.get("kb_rare_idf_threshold", 3.0)),
                 )
                 # filter by minimum score
                 results = [r for r in results if r[1] >= min_score]
