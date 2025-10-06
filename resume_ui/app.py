@@ -395,7 +395,8 @@ with home_tab:
         if st.session_state["kb_results_agg"]:
             st.subheader("Search results")
             render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
-            st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
+            # Render aggregated Markdown for readability
+            st.markdown(st.session_state["kb_results_agg"])
         else:
             st.info("No search results found")
 
@@ -551,7 +552,8 @@ with home_tab:
         with col_cp:
             render_copy_button("Copy to clipboard", selected_content, height=110)
 
-        st.text_area("Preview", selected_content, height=400)
+        # Render packaged context as Markdown by default
+        st.markdown(selected_content)
 
 with manage_tab:
     st.subheader("Manage knowledge base")
