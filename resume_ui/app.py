@@ -327,7 +327,7 @@ with home_tab:
             render_copy_button("Copy all results", st.session_state["kb_results_agg"], height=80)
             st.text_area("Aggregated results", st.session_state["kb_results_agg"], height=400)
         else:
-            st.info("No results")
+            st.info("No search results found")
 
     # Input and packaging live only on Home tab
     st.subheader("Input")
