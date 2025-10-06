@@ -103,7 +103,7 @@ _defaults_map = {
     "encoding_name": "o200k_base",
     "kb_top_k": 5,
     "kb_min_score": 0.005,
-    "kb_neighbors": 0,
+    "kb_neighbors": 1,
     "kb_sequence": True,
     "kb_use_ann": True,
     "kb_cand_mult": 5,
