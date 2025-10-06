@@ -125,6 +125,10 @@ class HybridSearcher:
 		lsa_weight: float = 0.2,
 		tfidf_metric: str = "cosine",
 		ann_weight: float = 0.15,
+		# HNSW query-time controls
+		ann_ef_factor: float = 2.0,
+		ann_ef_min: int = 50,
+		ann_ef_max: int = 400,
 		# Surgical improvements (optional)
 		mmr_diversify: bool = True,
 		mmr_lambda: float = 0.2,
@@ -162,6 +166,15 @@ class HybridSearcher:
 				qn = np.linalg.norm(q_red)
 				if qn > 0:
 					q_red = q_red / qn
+				# Dynamically increase ef for better recall relative to requested candidates
+				try:
+					ef_target = int(max(float(cand_k) * float(ann_ef_factor), float(ann_ef_min)))
+					# Ensure ef comfortably exceeds k to avoid degraded recall
+					ef_target = max(ef_target, int(cand_k) + 10)
+					ef_target = int(min(ef_target, int(ann_ef_max)))
+					self.hnsw_index.set_ef(int(ef_target))
+				except Exception:
+					pass
 				labels, distances = self.hnsw_index.knn_query(q_red, k=cand_k)
 				candidate_idx = labels[0]
 				# Convert cosine distances to similarity in [0,1]
