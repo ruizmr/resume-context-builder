@@ -457,6 +457,14 @@ with home_tab:
                 st.error("Please upload files/ZIP or provide a valid directory path.")
                 st.stop()
 
+        except Exception as e:
+            # Ensure the try block is properly closed and surface a friendly error
+            try:
+                st.error(f"Upload processing failed: {e}")
+            except Exception:
+                pass
+            st.stop()
+
         Path(md_dir).mkdir(parents=True, exist_ok=True)
         Path(Path(output_file).parent).mkdir(parents=True, exist_ok=True)
 
