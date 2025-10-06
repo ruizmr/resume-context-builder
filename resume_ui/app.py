@@ -270,7 +270,9 @@ with home_tab:
                 else:
                     searcher = st.session_state["kb_searcher"]
                 top_k = int(st.session_state.get("kb_top_k", 5))
-                min_score = float(st.session_state.get("kb_min_score", 0.005))
+                # Effective threshold with base floor (prevents persisted 0.0 from leaking)
+                _saved_ms = float(st.session_state.get("kb_min_score", 0.005))
+                min_score = max(0.005, _saved_ms)
                 results = searcher.search(
                     st.session_state["q_top"],
                     top_k=top_k,

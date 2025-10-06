@@ -143,6 +143,14 @@ class HybridSearcher:
 		k = min(max(1, top_k), len(self.ids))
 		if k <= 0:
 			return []
+		# Compute effective minimum score with a built-in floor
+		try:
+			base_floor = 0.005
+			ms = float(min_score) if min_score is not None else base_floor
+			if ms < base_floor:
+				ms = base_floor
+		except Exception:
+			ms = 0.005
 		candidate_idx: np.ndarray
 		# Use HNSW for candidate recall if available
 		ann_scores = None
@@ -298,13 +306,12 @@ class HybridSearcher:
 			final_scores = final_scores + (w_lsa * lsa_norm)
 		if ann_norm is not None:
 			final_scores = final_scores + (w_ann * ann_norm)
-		# If scores are uniformly low, short-circuit using min_score when provided
-		if min_score is not None:
-			try:
-				if final_scores is None or final_scores.size == 0 or float(np.max(final_scores)) < float(min_score):
-					return []
-			except Exception:
-				pass
+		# If scores are uniformly low, short-circuit using effective min score
+		try:
+			if final_scores is None or final_scores.size == 0 or float(np.max(final_scores)) < float(ms):
+				return []
+		except Exception:
+			pass
 		# Order by fused score (with optional MMR diversification)
 		if mmr_diversify and candidate_idx.shape[0] > 1 and k > 1:
 			try:
@@ -441,8 +448,8 @@ class HybridSearcher:
 				score = float(final_scores[cand_pos])
 			except Exception:
 				score = float(all_scores[idx])
-			# Enforce minimum score if provided
-			if min_score is not None and score < float(min_score):
+			# Enforce effective minimum score
+			if score < float(ms):
 				continue
 			cid = self.ids[idx]
 			path, cname = self.meta[idx]
