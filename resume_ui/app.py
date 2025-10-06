@@ -397,20 +397,14 @@ with home_tab:
             # Collapsible, scrollable panels per result with selection checkboxes
             results_list = st.session_state.get("kb_results_list") or []
             selected_map = st.session_state.get("kb_results_selected") or {}
+            # Build aggregated text from only selected items BEFORE rendering list so the button sits above
             if results_list:
-                for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
-                    cols = st.columns([1, 24])
-                    with cols[0]:
-                        sel = st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}")
-                        selected_map[cid] = bool(sel)
-                    with cols[1]:
-                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
-                        with st.expander(header, expanded=(i == 0)):
-                            st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
-                # Persist selection state
-                st.session_state["kb_results_selected"] = dict(selected_map)
-                # Build aggregated text from only selected items
-                selected_results = [r for r in results_list if selected_map.get(r[0], True)]
+                selected_results = []
+                for cid, score, path, cname, snippet, full_text in results_list:
+                    sel_key = f"kb_sel_{cid}"
+                    sel_val = bool(st.session_state.get(sel_key, selected_map.get(cid, True)))
+                    if sel_val:
+                        selected_results.append((cid, score, path, cname, snippet, full_text))
                 if selected_results:
                     sections = []
                     for cid, score, path, cname, snippet, full_text in selected_results:
@@ -427,11 +421,24 @@ with home_tab:
                             if len(toks) > max_tok:
                                 aggregated_sel = enc.decode(toks[:max_tok])
                     except Exception:
-                        pass
+                        aggregated_sel = aggregated_sel
                 else:
                     aggregated_sel = ""
-                # Copy selected
+                # Copy selected button ABOVE the results list
                 render_copy_button("Copy all results", aggregated_sel, height=80)
+
+                # Now render list with checkboxes and update selection map
+                for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
+                    cols = st.columns([1, 24])
+                    with cols[0]:
+                        sel = st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}")
+                        selected_map[cid] = bool(sel)
+                    with cols[1]:
+                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
+                        with st.expander(header, expanded=(i == 0)):
+                            st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
+                # Persist selection state
+                st.session_state["kb_results_selected"] = dict(selected_map)
             else:
                 # Fallback to aggregated rendering
                 st.markdown(st.session_state["kb_results_agg"])
