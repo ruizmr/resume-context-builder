@@ -11,9 +11,9 @@ from sklearn.decomposition import TruncatedSVD
 from kb.db import get_engine, persist_chunk_vectors, fetch_all_chunks, fetch_chunk_vectors
 
 try:
-    import hnswlib  # type: ignore
+    from pynndescent import NNDescent  # type: ignore
 except Exception:  # pragma: no cover - optional
-    hnswlib = None
+    NNDescent = None
 
 
 class HybridSearcher:
@@ -47,11 +47,10 @@ class HybridSearcher:
 		self.ids: List[int] = []
 		self.texts: List[str] = []
 		self.meta: List[Tuple[str, str]] = []  # path, chunk_name
-		# HNSW over SVD-reduced TF-IDF (optional)
+		# ANN over SVD-reduced TF-IDF (optional)
 		self.svd: TruncatedSVD | None = None
 		self.doc_vectors_reduced: np.ndarray | None = None
-		self.hnsw_index = None
-		self.hnsw_dim: int = 0
+		self.ann_index = None
 		# Map of file path -> list of matrix indices ordered by chunk number
 		self.path_to_ordered_indices: Dict[str, List[int]] = {}
 		# Cache settings
@@ -101,8 +100,8 @@ class HybridSearcher:
 						pgvec = {cid: vec for cid, vec in pg.items() if vec}
 			except Exception:
 				pgvec = {}
-			# Build HNSW if available and enough docs
-			if hnswlib is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
+			# Build ANN (PyNNDescent) if available and enough docs
+			if NNDescent is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
 				# Choose a safe number of components
 				n_comp = min(256, max(16, min(self.matrix.shape[0] - 1, self.matrix.shape[1] - 1)))
 				try:
@@ -122,17 +121,18 @@ class HybridSearcher:
 					norms[norms == 0] = 1.0
 					doc_vecs = doc_vecs / norms
 					self.doc_vectors_reduced = doc_vecs
-					idx = hnswlib.Index(space='cosine', dim=n_comp)
-					idx.init_index(max_elements=doc_vecs.shape[0], ef_construction=200, M=32)
-					idx.add_items(doc_vecs, np.arange(doc_vecs.shape[0]))
-					idx.set_ef(100)
-					self.hnsw_index = idx
-					self.hnsw_dim = n_comp
+					# Build NN-Descent index over reduced vectors
+					try:
+						# Use a reasonable neighbor graph size; cap by dataset size
+						n_nbrs = int(min(64, max(10, doc_vecs.shape[0] - 1)))
+						self.ann_index = NNDescent(doc_vecs, metric="cosine", n_neighbors=n_nbrs, random_state=42)
+					except Exception:
+						self.ann_index = None
 				except Exception:
-					# Fall back silently if SVD/HNSW fails
+					# Fall back silently if SVD/ANN build fails
 					self.svd = None
 					self.doc_vectors_reduced = None
-					self.hnsw_index = None
+					self.ann_index = None
 			# Persist vectors to pgvector (best-effort) when Postgres present
 			try:
 				if engine.dialect.name == "postgresql" and self.doc_vectors_reduced is not None:
@@ -157,7 +157,7 @@ class HybridSearcher:
 		lsa_weight: float = 0.2,
 		tfidf_metric: str = "cosine",
 		ann_weight: float = 0.15,
-		# HNSW query-time controls
+		# ANN query-time controls (legacy names retained for compatibility)
 		ann_ef_factor: float = 2.0,
 		ann_ef_min: int = 50,
 		ann_ef_max: int = 400,
@@ -188,9 +188,9 @@ class HybridSearcher:
 		except Exception:
 			ms = 0.005
 		candidate_idx: np.ndarray
-		# Use HNSW for candidate recall if available
+		# Use ANN index for candidate recall if available
 		ann_scores = None
-		if use_ann and self.hnsw_index is not None and self.svd is not None and self.doc_vectors_reduced is not None:
+		if use_ann and self.ann_index is not None and self.svd is not None and self.doc_vectors_reduced is not None:
 			try:
 				q_red = self.svd.transform(q_vec).astype(np.float32, copy=False)
 				cand_k = min(max(10, k * max(1, int(cand_multiplier))), len(self.ids))
@@ -198,16 +198,7 @@ class HybridSearcher:
 				qn = np.linalg.norm(q_red)
 				if qn > 0:
 					q_red = q_red / qn
-				# Dynamically increase ef for better recall relative to requested candidates
-				try:
-					ef_target = int(max(float(cand_k) * float(ann_ef_factor), float(ann_ef_min)))
-					# Ensure ef comfortably exceeds k to avoid degraded recall
-					ef_target = max(ef_target, int(cand_k) + 10)
-					ef_target = int(min(ef_target, int(ann_ef_max)))
-					self.hnsw_index.set_ef(int(ef_target))
-				except Exception:
-					pass
-				labels, distances = self.hnsw_index.knn_query(q_red, k=cand_k)
+				labels, distances = self.ann_index.query(q_red, k=cand_k)
 				candidate_idx = labels[0]
 				# Convert cosine distances to similarity in [0,1]
 				try:
@@ -324,7 +315,7 @@ class HybridSearcher:
 		bm25_norm = _minmax_norm(bm25_scores) if bm25_scores is not None else None
 		lsa_norm = _minmax_norm(lsa_scores) if lsa_scores is not None else None
 		ann_norm = _minmax_norm(ann_scores) if ann_scores is not None else None
-		# Weights: allocate bm25_weight to BM25, lsa_weight to LSA, ann_weight to HNSW distance, remainder to TF-IDF
+		# Weights: allocate bm25_weight to BM25, lsa_weight to LSA, ann_weight to ANN distance, remainder to TF-IDF
 		w_bm25 = float(max(0.0, min(1.0, bm25_weight)))
 		w_lsa = float(max(0.0, min(1.0, lsa_weight)))
 		w_ann = float(max(0.0, min(1.0, ann_weight)))

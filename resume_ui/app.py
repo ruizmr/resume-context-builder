@@ -208,12 +208,12 @@ with st.sidebar:
     kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
     kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
     # Advanced retrieval tuning
-    kb_use_ann = st.checkbox("Use ANN (HNSW) for candidates", key="kb_use_ann")
+    kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
     kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
     kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
     kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
     kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
-    kb_ann_weight = st.slider("ANN (HNSW) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
+    kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
     mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
     mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
     phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
@@ -252,8 +252,10 @@ with st.sidebar:
 
     st.divider()
 
-def render_copy_button(label: str, text: str, height: int = 110):
+def render_copy_button(label: str, text: str, height: int = 110, disabled: bool = False, help_text: str | None = None):
     b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    uid = uuid.uuid4().hex[:8]
+    title = help_text or ""
     tmpl = """
     <style>
     .copy-wrap { position: relative; width: 100%; margin: 0.2rem 0; }
@@ -265,6 +267,7 @@ def render_copy_button(label: str, text: str, height: int = 110):
     }
     .copy-btn:hover { filter: brightness(0.95); }
     .copy-btn.copied { background-color: #22c55e; }
+    .copy-btn:disabled { background-color: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
     .toast {
       position: absolute; top: -2.2rem; right: 0.25rem; background: #22c55e; color: #fff;
       padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; display: inline-flex; align-items: center;
@@ -274,14 +277,14 @@ def render_copy_button(label: str, text: str, height: int = 110):
     .toast .check { font-weight: 900; }
     </style>
     <script>
-    async function copyGeneric(){
+    async function copyGeneric_{{UID}}(){
       const text = atob('{{B64}}');
       try { await navigator.clipboard.writeText(text); } catch(e) {
         const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
         ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e2) {} document.body.removeChild(ta);
       }
-      const toast = document.getElementById('copy-toast');
-      const btn = document.getElementById('copy-btn');
+      const toast = document.getElementById('copy-toast-{{UID}}');
+      const btn = document.getElementById('copy-btn-{{UID}}');
       if (btn) {
         const original = btn.textContent;
         btn.classList.add('copied'); btn.textContent = 'Copied!';
@@ -291,11 +294,18 @@ def render_copy_button(label: str, text: str, height: int = 110):
     }
     </script>
     <div class="copy-wrap">
-      <button id="copy-btn" class="copy-btn" onclick="copyGeneric()">{{LABEL}}</button>
-      <span id="copy-toast" class="toast"><span class="check">✓</span> Copied to clipboard</span>
+      <button id="copy-btn-{{UID}}" class="copy-btn" {{DISABLED}} onclick="copyGeneric_{{UID}}()" title="{{TITLE}}" aria-label="{{LABEL}}">{{LABEL}}</button>
+      <span id="copy-toast-{{UID}}" class="toast"><span class="check">✓</span> Copied to clipboard</span>
     </div>
     """
-    html = tmpl.replace("{{B64}}", b64).replace("{{LABEL}}", label)
+    html = (
+        tmpl
+        .replace("{{B64}}", b64)
+        .replace("{{LABEL}}", label)
+        .replace("{{UID}}", uid)
+        .replace("{{TITLE}}", title)
+        .replace("{{DISABLED}}", "disabled" if disabled else "")
+    )
     components.html(html, height=height)
 
 # Tabs
@@ -424,8 +434,21 @@ with home_tab:
                         aggregated_sel = aggregated_sel
                 else:
                     aggregated_sel = ""
-                # Copy selected button ABOVE the results list
-                render_copy_button("Copy all results", aggregated_sel, height=80)
+                # Copy selected button ABOVE the results list with selected count and tooltip
+                sel_count = len(selected_results)
+                total_count = len(results_list)
+                copy_cols = st.columns([2, 1])
+                with copy_cols[0]:
+                    render_copy_button(
+                        "Copy all selected results",
+                        aggregated_sel,
+                        height=80,
+                        disabled=(sel_count == 0),
+                        help_text="Copies only the selected results",
+                    )
+                with copy_cols[1]:
+                    st.caption(f"Selected {sel_count} of {total_count}")
+                st.caption("Select which results to include below.")
 
                 # Now render list with checkboxes and update selection map (revert to previous full expander per item)
                 for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
@@ -603,7 +626,7 @@ with home_tab:
                 use_container_width=True,
             )
         with col_cp:
-            render_copy_button("Copy to clipboard", selected_content, height=110)
+            render_copy_button("Copy to clipboard", selected_content, height=110, help_text="Copies the current previewed chunk")
 
         # Render packaged context as Markdown in a collapsible panel
         with st.expander("Preview (Markdown)", expanded=True):
