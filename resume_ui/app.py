@@ -97,6 +97,36 @@ def _safe_extract_zip(zip_path: Path, target_dir: Path) -> int:
     return extracted
 
 
+# Text normalization helpers
+def _normalize_mojibake(text: str) -> str:
+    """Best-effort fix for common PDF→MD mojibake (e.g., â, â) and stray NBSP.
+
+    Strategy:
+    - If suspicious Windows-1252/Latin-1 artifacts are present, attempt a
+      single latin1→utf-8 round-trip which repairs sequences like â → —.
+    - Then normalize non-breaking spaces and zero-width chars.
+    """
+    s = text or ""
+    # Only attempt re-decode when artifacts commonly appear
+    if ("Â" in s) or ("Ã" in s) or ("â" in s):
+        try:
+            s = s.encode("latin1").decode("utf-8")
+        except Exception:
+            # Keep original on failure
+            s = s
+    # Replace non-breaking spaces with regular spaces
+    try:
+        s = s.replace("\u00A0", " ")
+    except Exception:
+        pass
+    # Strip zero-width and BOM if present
+    for zw in ("\u200b", "\ufeff"):
+        try:
+            s = s.replace(zw, "")
+        except Exception:
+            pass
+    return s
+
 # Persistent settings
 SETTINGS_FILE = STATE_DIR / "settings.json"
 PERSIST_KEYS = [
@@ -551,6 +581,24 @@ with home_tab:
                 progress_cb=_progress,
                 timing_cb=_timing,
             )
+            # One-time post-processing: normalize mojibake in generated Markdown before storage/packaging
+            try:
+                normalized_files = 0
+                for p in list(generated_md):
+                    try:
+                        txt = Path(p).read_text(encoding="utf-8")
+                        fixed = _normalize_mojibake(txt)
+                        if fixed != txt:
+                            Path(p).write_text(fixed, encoding="utf-8")
+                            normalized_files += 1
+                    except Exception:
+                        # Continue best-effort on individual file errors
+                        pass
+                if normalized_files > 0:
+                    st.caption(f"Normalized text encoding in {normalized_files} file(s)")
+            except Exception:
+                # Non-fatal: proceed even if normalization step fails
+                pass
             if slow_log:
                 slow_log.sort(key=lambda x: x[1], reverse=True)
                 top = "\n".join([f"{Path(p).name} — {t:.2f}s" for p, t in slow_log[:5]])
