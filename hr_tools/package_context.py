@@ -13,7 +13,7 @@ from repomix import (
 	RepomixOutputStyle,
 )
 
-import tiktoken
+from context_packager_data.tokenizer import get_encoding
 
 
 def create_hr_config(
@@ -119,7 +119,7 @@ def _split_output_by_tokens(
 	- Splits at lines starting with '## File:'.
 	- Includes the preamble (everything before the first '## File:') only in the first chunk if include_preamble_once.
 	"""
-	enc = tiktoken.get_encoding(encoding_name)
+	enc = get_encoding(encoding_name)
 	lines = output_content.splitlines(True)
 	file_header_idxs: List[int] = [i for i, ln in enumerate(lines) if ln.startswith("## File: ")]
 

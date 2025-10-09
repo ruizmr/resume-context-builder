@@ -3,6 +3,7 @@ from pathlib import Path
 
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from kb.upsert import upsert_markdown_files
+from kb.artifacts import build_and_save_artifacts
 
 
 def main() -> None:
@@ -23,6 +24,11 @@ def main() -> None:
     md_files = convert_pdfs_to_markdown(str(input_dir), str(md_out))
     count = upsert_markdown_files([Path(p) for p in md_files])
     print(f"Converted {len(md_files)} file(s); upserted {count} chunk(s)")
+    try:
+        build_and_save_artifacts(enable_ann=True)
+        print("Artifacts built: TF-IDF, SVD, ANN (if available)")
+    except Exception as e:
+        print(f"[warn] Failed to build artifacts: {e}")
 
 
 if __name__ == "__main__":

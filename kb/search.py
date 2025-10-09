@@ -55,6 +55,9 @@ class HybridSearcher:
 		self.path_to_ordered_indices: Dict[str, List[int]] = {}
 		# Cache settings
 		self.max_pgvector_cache: int = 10000  # max vectors to hydrate from DB on fit
+		# Performance controls
+		self.enable_ann: bool = True
+		self.svd_components_cap: int = 256
 
 	def fit(self, docs: List[Tuple[int, str, str, str]]):
 		# docs: (id, path, chunk_name, content)
@@ -100,10 +103,10 @@ class HybridSearcher:
 						pgvec = {cid: vec for cid, vec in pg.items() if vec}
 			except Exception:
 				pgvec = {}
-			# Build ANN (PyNNDescent) if available and enough docs
-			if NNDescent is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
+			# Build ANN (PyNNDescent) if available and enough docs and enabled
+			if self.enable_ann and NNDescent is not None and self.matrix.shape[0] >= 10 and self.matrix.shape[1] >= 2:
 				# Choose a safe number of components
-				n_comp = min(256, max(16, min(self.matrix.shape[0] - 1, self.matrix.shape[1] - 1)))
+				n_comp = min(int(self.svd_components_cap), max(16, min(self.matrix.shape[0] - 1, self.matrix.shape[1] - 1)))
 				try:
 					self.svd = TruncatedSVD(n_components=n_comp, random_state=42)
 					if len(pgvec) == len(self.ids):

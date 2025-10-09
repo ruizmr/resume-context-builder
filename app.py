@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 import streamlit as st
-import tiktoken
+from context_packager_data.tokenizer import get_encoding
 import streamlit.components.v1 as components
 import time
 
@@ -41,7 +41,6 @@ st.subheader("Input")
 uploaded_files = st.file_uploader("Upload ZIP or supported files", type=None, accept_multiple_files=True)
 fallback_dir_main = st.text_input("Or enter a directory path (optional)", value="")
 
-st.write("")
 left, mid, right = st.columns([1,2,1])
 with mid:
 	start = st.button("Process and Package", type="primary", use_container_width=True)
@@ -51,6 +50,10 @@ if clear:
 	st.session_state.pop("context_content", None)
 	st.session_state.pop("out_paths", None)
 	st.session_state.pop("selected_chunk", None)
+	try:
+		st.session_state["file_uploader"] = []
+	except Exception:
+		pass
 
 if start:
 	effective_pdf_dir = None
@@ -107,7 +110,7 @@ if start:
 		except Exception as e:
 			st.error(f"Failed to read output file: {e}")
 		st.session_state["out_paths"] = [str(p) for p in out_paths]
-		enc = tiktoken.get_encoding(encoding_name)
+        enc = get_encoding(encoding_name)
 		rows = []
 		for p in out_paths:
 			text = Path(p).read_text(encoding="utf-8")
@@ -116,6 +119,12 @@ if start:
 		st.write("Generated files (with token counts):")
 		for p, tok in rows:
 			st.write(f"{p} — tokens: {tok}")
+
+	# Clear uploaded files selection to avoid reprocessing lingering files
+	try:
+		st.session_state["file_uploader"] = []
+	except Exception:
+		pass
 
 if "out_paths" in st.session_state and st.session_state["out_paths"]:
 	st.subheader("Packaged Context")

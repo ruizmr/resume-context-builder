@@ -20,6 +20,7 @@ from kb.db import (
 )
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from kb.upsert import upsert_markdown_files
+from kb.artifacts import build_and_save_artifacts
 
 
 def _scheduler() -> BackgroundScheduler:
@@ -73,6 +74,12 @@ def _job_ingest(input_dir: str, markdown_out_dir: Optional[str] = None, job_id: 
         # Upsert into KB
         count = upsert_markdown_files([Path(p) for p in md_files], progress_cb=_progress_upsert, cancel_cb=_cancel)
         update_job_run(run_id, chunks_upserted=count, last_message=f"Upserted {count} chunk(s)")
+        # Build artifacts (best-effort)
+        try:
+            update_job_run(run_id, last_message="Building search artifacts")
+            build_and_save_artifacts(enable_ann=True)
+        except Exception:
+            pass
         # Finalize status depending on cancellation
         if is_cancel_requested(run_id):
             finish_job_run(run_id, status="cancelled")

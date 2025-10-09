@@ -10,7 +10,7 @@ import importlib.resources as resources
 from datetime import time as dt_time, datetime, timedelta, timezone
 
 import streamlit as st
-import tiktoken
+from context_packager_data.tokenizer import get_encoding
 import streamlit.components.v1 as components
 
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
@@ -18,6 +18,7 @@ from hr_tools.package_context import package_markdown_directory
 from kb.upsert import upsert_markdown_files
 from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id, STATE_DIR, get_database_url
 from kb.search import HybridSearcher
+from kb.artifacts import load_artifacts
 
 
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
@@ -359,13 +360,54 @@ with home_tab:
         if submitted_search and st.session_state.get("q_top", "").strip():
             try:
                 engine = get_engine()
-                # cache searcher in session to avoid refit on every search
-                if "kb_searcher" not in st.session_state or (st.session_state.get("kb_searcher_docs_len") is not None and st.session_state.get("kb_searcher_docs_len") != len(fetch_all_chunks(engine))):
-                    docs = fetch_all_chunks(engine)
-                    searcher = HybridSearcher()
-                    searcher.fit(docs)
-                    st.session_state["kb_searcher"] = searcher
-                    st.session_state["kb_searcher_docs_len"] = len(docs)
+                # Try to load precomputed artifacts; fallback to fit
+                if "kb_searcher" not in st.session_state:
+                    art = load_artifacts()
+                    if art and art.get("tfidf") and art.get("count"):
+                        docs = fetch_all_chunks(engine)
+                        searcher = HybridSearcher()
+                        # Initialize structures from artifacts
+                        try:
+                            searcher.ids = [d[0] for d in docs]
+                            searcher.meta = [(d[1], d[2]) for d in docs]
+                            searcher.texts = [d[3] for d in docs]
+                            searcher.vectorizer = art["tfidf"]
+                            searcher.count_vectorizer = art["count"]
+                            from sklearn.metrics.pairwise import linear_kernel as _lk
+                            # Use matrix when available, else transform
+                            if art.get("tfidf_matrix") is not None:
+                                searcher.matrix = art["tfidf_matrix"]
+                            else:
+                                searcher.matrix = searcher.vectorizer.transform(searcher.texts)
+                            searcher.svd = art.get("svd")
+                            if art.get("doc_vectors") is not None:
+                                searcher.doc_vectors_reduced = art["doc_vectors"]
+                            searcher.ann_index = art.get("ann_index")
+                            # Rebuild order map
+                            import re as _re
+                            order_map = {}
+                            for m_idx, (path, cname) in enumerate(searcher.meta):
+                                m = _re.search(r"(\d+)$", cname)
+                                chunk_num = int(m.group(1)) if m else (m_idx + 1)
+                                order_map.setdefault(path, []).append((chunk_num, m_idx))
+                            searcher.path_to_ordered_indices = {
+                                p: [mi for _, mi in sorted(pairs, key=lambda x: x[0])] for p, pairs in order_map.items()
+                            }
+                            st.session_state["kb_searcher"] = searcher
+                            st.session_state["kb_searcher_docs_len"] = len(docs)
+                        except Exception:
+                            # Fallback to fitting
+                            docs = fetch_all_chunks(engine)
+                            searcher = HybridSearcher()
+                            searcher.fit(docs)
+                            st.session_state["kb_searcher"] = searcher
+                            st.session_state["kb_searcher_docs_len"] = len(docs)
+                    else:
+                        docs = fetch_all_chunks(engine)
+                        searcher = HybridSearcher()
+                        searcher.fit(docs)
+                        st.session_state["kb_searcher"] = searcher
+                        st.session_state["kb_searcher_docs_len"] = len(docs)
                 else:
                     searcher = st.session_state["kb_searcher"]
                 top_k = int(st.session_state.get("kb_top_k", 5))
@@ -416,7 +458,7 @@ with home_tab:
                     enc_name = st.session_state.get("encoding_name", "o200k_base")
                     if max_tok and max_tok > 0:
                         try:
-                            enc = tiktoken.get_encoding(enc_name)
+                            enc = get_encoding(enc_name)
                             toks = enc.encode(aggregated)
                             if len(toks) > max_tok:
                                 aggregated = enc.decode(toks[:max_tok])
@@ -456,7 +498,7 @@ with home_tab:
                         max_tok = int(st.session_state.get("max_tokens_config") or 0)
                         enc_name = st.session_state.get("encoding_name", "o200k_base")
                         if max_tok and max_tok > 0:
-                            enc = tiktoken.get_encoding(enc_name)
+                            enc = get_encoding(enc_name)
                             toks = enc.encode(aggregated_sel)
                             if len(toks) > max_tok:
                                 aggregated_sel = enc.decode(toks[:max_tok])
@@ -514,6 +556,10 @@ with home_tab:
         st.session_state.pop("context_content", None)
         st.session_state.pop("out_paths", None)
         st.session_state.pop("selected_chunk", None)
+        try:
+            st.session_state["home_file_uploader"] = []
+        except Exception:
+            pass
 
     if start:
         effective_input_dir = None
@@ -639,7 +685,7 @@ with home_tab:
             except Exception as e:
                 st.error(f"Failed to read output file: {e}")
             st.session_state["out_paths"] = [str(p) for p in out_paths]
-            enc = tiktoken.get_encoding(encoding_name)
+            enc = get_encoding(encoding_name)
             rows = []
             for p in out_paths:
                 text = Path(p).read_text(encoding="utf-8")
@@ -652,6 +698,12 @@ with home_tab:
         try:
             if _temp_root and _temp_root.exists():
                 shutil.rmtree(_temp_root, ignore_errors=True)
+        except Exception:
+            pass
+
+        # Clear uploaded files selection to avoid reprocessing lingering files
+        try:
+            st.session_state["home_file_uploader"] = []
         except Exception:
             pass
 

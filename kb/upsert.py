@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 
 import re
-import tiktoken
+from context_packager_data.tokenizer import get_encoding
 
 from kb.db import get_engine, upsert_chunks, get_file_index, upsert_file_index, delete_chunks_by_path
 
@@ -68,7 +68,7 @@ def slice_text_tokens(
 		return []
 	if max_tokens <= 0:
 		return [text]
-	enc = tiktoken.get_encoding(encoding_name)
+	enc = get_encoding(encoding_name)
 	toks = enc.encode(text)
 	chunks: List[str] = []
 	step = max(1, max_tokens - max(0, overlap_tokens))

@@ -61,7 +61,14 @@ def main() -> None:
 		"--server.headless=true",
 	]
 
-	env = os.environ.copy()
+    env = os.environ.copy()
+    # Ensure offline tiktoken cache path is propagated to the subprocess
+    if "TIKTOKEN_CACHE_DIR" not in env:
+        try:
+            from context_packager_data.tokenizer import prefer_offline_cache
+            env["TIKTOKEN_CACHE_DIR"] = prefer_offline_cache()
+        except Exception:
+            pass
 	proc = subprocess.Popen(cmd, env=env)
 
 	url = f"http://{address}:{port}"
