@@ -408,25 +408,25 @@ with st.sidebar:
         kb_min_score = 0.005
         kb_neighbors = 0
     else:
-    kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
-    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
-    kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
+        kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
+        kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
+        kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
         
     kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
     
     if not auto_tune:
-    # Advanced retrieval tuning
-    kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
-    kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
-    kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
-    kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
-    kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
-    kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
-    mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
-    mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
-    phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
-    enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
-    rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
+        # Advanced retrieval tuning
+        kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
+        kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
+        kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
+        kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
+        kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
+        kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
+        mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
+        mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
+        phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
+        enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
+        rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
 
     st.divider()
     
