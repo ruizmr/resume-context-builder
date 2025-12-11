@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "context-packager"
-version = "0.2.19"
+version = "0.2.22"
 description = "Convert documents to Markdown (MarkItDown), package with Repomix, and serve a Streamlit UI for copyable LLM context."
 readme = "README.md"
 requires-python = ">=3.10"
