@@ -6,6 +6,7 @@ import re
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import linear_kernel
 from sklearn.decomposition import TruncatedSVD
 from kb.db import get_engine, persist_chunk_vectors, fetch_all_chunks, fetch_chunk_vectors
@@ -523,5 +524,96 @@ class HybridSearcher:
 			snippet = snippet_raw.strip()
 			results.append((cid, score, path, cname, snippet, text))
 		return results
+
+	def cluster_search_results(
+		self,
+		result_cids: List[int],
+		n_clusters: int = 5,
+		label_top_n: int = 3
+	) -> List[Dict]:
+		"""Cluster the given search result chunks and auto-label them.
+
+		Returns a list of dicts:
+		[
+			{
+				"label": "cloud, cost, billing",
+				"cids": [101, 105, 203],
+				"count": 3
+			},
+			...
+		]
+		"""
+		if not result_cids or self.doc_vectors_reduced is None:
+			return [{"label": "All results", "cids": result_cids, "count": len(result_cids)}]
+
+		# Map cids to internal indices
+		cid_to_idx = {cid: i for i, cid in enumerate(self.ids)}
+		valid_indices = []
+		valid_cids = []
+		for cid in result_cids:
+			if cid in cid_to_idx:
+				valid_indices.append(cid_to_idx[cid])
+				valid_cids.append(cid)
+
+		if not valid_indices:
+			return []
+
+		if len(valid_indices) < 2:
+			return [{"label": "All results", "cids": valid_cids, "count": len(valid_cids)}]
+
+		# Get vectors for these results
+		vectors = self.doc_vectors_reduced[valid_indices]
+
+		# Adjust n_clusters if we have few results
+		eff_n_clusters = min(n_clusters, len(valid_indices))
+		
+		# Perform clustering
+		# Use cosine distance (metric='cosine') requires linkage='average' or 'single' usually, 
+		# but AgglomerativeClustering with 'cosine' is supported in newer sklearn with linkage='average' or 'complete'.
+		# Or precompute distance matrix. For simplicity/robustness on older sklearn, use euclidean on normalized vectors (equivalent to cosine ranking).
+		try:
+			algo = AgglomerativeClustering(n_clusters=eff_n_clusters, metric='euclidean', linkage='ward')
+			labels = algo.fit_predict(vectors)
+		except Exception:
+			# Fallback to single cluster
+			return [{"label": "All results", "cids": valid_cids, "count": len(valid_cids)}]
+
+		# Group by label
+		clusters: Dict[int, List[int]] = {}
+		for i, label in enumerate(labels):
+			clusters.setdefault(label, []).append(valid_indices[i])
+
+		# Generate output with text labels
+		output = []
+		feature_names = self.vectorizer.get_feature_names_out()
+		
+		for label_id, indices in clusters.items():
+			# Extract top terms
+			# Sum TF-IDF vectors for these docs
+			if self.matrix is not None:
+				sub_matrix = self.matrix[indices]
+				# Sum columns
+				sum_vec = np.asarray(sub_matrix.sum(axis=0)).ravel()
+				# Get top N indices
+				top_indices = sum_vec.argsort()[::-1][:label_top_n]
+				terms = [feature_names[i] for i in top_indices if sum_vec[i] > 0]
+				cluster_label = ", ".join(terms)
+			else:
+				cluster_label = f"Cluster {label_id + 1}"
+
+			if not cluster_label:
+				cluster_label = f"Cluster {label_id + 1}"
+
+			# Convert indices back to cids
+			cluster_cids = [self.ids[idx] for idx in indices]
+			output.append({
+				"label": cluster_label,
+				"cids": cluster_cids,
+				"count": len(cluster_cids)
+			})
+
+		# Sort clusters by size descending
+		output.sort(key=lambda x: x["count"], reverse=True)
+		return output
 
 

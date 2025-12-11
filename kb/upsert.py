@@ -4,7 +4,8 @@ from typing import List, Tuple, Optional, Callable
 import re
 from context_packager_data.tokenizer import get_encoding
 
-from kb.db import get_engine, upsert_chunks, get_file_index, upsert_file_index, delete_chunks_by_path
+from kb.db import get_engine, upsert_chunks, get_file_index, upsert_file_index, delete_chunks_by_path, fetch_chunk_ids_by_path
+from kb.graph import build_meta_graph
 
 
 def _find_prev_boundary(text: str, approx_char_idx: int, window: int = 500) -> int:
@@ -151,6 +152,17 @@ def upsert_markdown_files(
 			continue
 	if records:
 		upsert_chunks(engine, records)
+		
+		# Update Meta-Graph for new chunks
+		# 1. Identify paths involved
+		paths = list(set(r[0] for r in records))
+		all_new_ids = []
+		for p in paths:
+			all_new_ids.extend(fetch_chunk_ids_by_path(engine, p))
+		
+		if all_new_ids:
+			build_meta_graph(all_new_ids)
+
 	return len(records)
 
 

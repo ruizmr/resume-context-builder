@@ -19,7 +19,69 @@ from kb.upsert import upsert_markdown_files
 from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id, STATE_DIR, get_database_url
 from kb.search import HybridSearcher
 from kb.artifacts import load_artifacts
+from kb.db import fetch_meta_nodes_for_chunks
 
+try:
+    from streamlit_agraph import agraph, Node, Edge, Config
+except ImportError:
+    agraph = None
+
+def render_interactive_graph(searcher, cids: list[int]):
+    if not agraph:
+        st.warning("streamlit-agraph not installed")
+        return None
+
+    # Map cid -> internal idx
+    cid_to_idx = {c: i for i, c in enumerate(searcher.ids)}
+    
+    # Fetch Meta Info
+    meta_map = fetch_meta_nodes_for_chunks(get_engine(), cids)
+    
+    nodes = []
+    edges = []
+    added_nodes = set()
+    
+    # Track meta -> doc links for reverse lookup
+    # But for graph, we just need nodes/edges
+    
+    for cid in cids:
+        if cid not in added_nodes:
+            idx = cid_to_idx.get(cid)
+            label = f"Doc {cid}"
+            title = "Unknown"
+            if idx is not None:
+                path, name = searcher.meta[idx]
+                label = name
+                title = f"{path}\n{name}"
+            
+            # Use smaller nodes for docs
+            nodes.append(Node(id=f"doc_{cid}", label=label, title=title, size=15, color="#4b8fea", shape="box"))
+            added_nodes.add(cid)
+            
+            # Add Meta Nodes
+            metas = meta_map.get(cid, [])
+            for m_type, m_name in metas:
+                m_id = f"meta_{m_type}_{m_name}"
+                if m_id not in added_nodes:
+                    color = "#ff6b6b" if m_type == "topic" else ("#51cf66" if m_type == "entity" else "#fcc419")
+                    # Larger nodes for topics
+                    nodes.append(Node(id=m_id, label=m_name, title=f"{m_type}: {m_name}", size=25, color=color, shape="ellipse"))
+                    added_nodes.add(m_id)
+                
+                # Edge Doc -> Meta
+                edges.append(Edge(source=f"doc_{cid}", target=m_id, color="#e0e0e0"))
+
+    config = Config(
+        width="100%",
+        height=500,
+        directed=False, 
+        physics=True, 
+        hierarchical=False,
+        node={'labelProperty': 'label', 'renderLabel': True}
+    )
+    
+    # Returns the ID of the clicked node (e.g., "doc_123" or "meta_topic_Financials")
+    return agraph(nodes=nodes, edges=edges, config=config)
 
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
 st.title("Context Packager")
@@ -478,6 +540,174 @@ with home_tab:
             st.subheader("Search results")
             # Collapsible, scrollable panels per result with selection checkboxes
             results_list = st.session_state.get("kb_results_list") or []
+            
+            # Contextual Ambiguity: Auto-Clustering
+            filtered_results = results_list
+            if results_list and "kb_searcher" in st.session_state:
+                try:
+                    searcher = st.session_state["kb_searcher"]
+                    cids = [r[0] for r in results_list]
+                    clusters = searcher.cluster_search_results(cids, n_clusters=5)
+                    
+                    if len(clusters) > 1:
+                        st.caption("Auto-detected Contexts:")
+                        # Create tabs for clusters
+                        tab_labels = ["All"] + [f"{c['label']} ({c['count']})" for c in clusters]
+                        tabs = st.tabs(tab_labels)
+                        
+                        # "All" tab
+                        with tabs[0]:
+                            filtered_results = results_list
+                        
+                        # Cluster tabs
+                        for i, cluster in enumerate(clusters):
+                            with tabs[i+1]:
+                                cluster_cids = set(cluster["cids"])
+                                filtered_results = [r for r in results_list if r[0] in cluster_cids]
+                                
+                                # If inside a specific cluster tab, we want to only show those results
+                                # Since Streamlit executes the whole script top-down, we need to capture 
+                                # the filtered list for the rendering block below.
+                                # However, st.tabs content is executed immediately. 
+                                # So we need to restructure the rendering loop to happen *inside* or 
+                                # be aware of the active selection. 
+                                # Limitation: st.tabs doesn't return state easily without session state.
+                                # Workaround: We'll render the list inside each tab, or use a radio button/pills for selection.
+                                # Tabs are cleaner but require duplicating the render call or wrapping it.
+                                # Let's use the Render Logic function approach.
+                except Exception as e:
+                    # Fallback to normal list
+                    pass
+
+            # Define renderer to reuse
+            def render_results(results_subset, key_suffix=""):
+                selected_map = st.session_state.get("kb_results_selected") or {}
+                if not results_subset:
+                    st.info("No results in this context.")
+                    return
+
+                # Build aggregated text for copy
+                selected_results = []
+                for cid, score, path, cname, snippet, full_text in results_subset:
+                    sel_key = f"kb_sel_{cid}{key_suffix}"
+                    # Sync with global map if possible, or use local key
+                    is_sel = st.session_state.get(sel_key, selected_map.get(cid, True))
+                    if is_sel:
+                        selected_results.append((cid, score, path, cname, snippet, full_text))
+                
+                if selected_results:
+                    sections = []
+                    for cid, score, path, cname, snippet, full_text in selected_results:
+                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
+                        sections.append(f"{header}\n\n{full_text.strip()}")
+                    aggregated_sel = "\n\n---\n\n".join(sections)
+                else:
+                    aggregated_sel = ""
+
+                # Copy button
+                sel_count = len(selected_results)
+                copy_cols = st.columns([2, 1])
+                with copy_cols[0]:
+                    render_copy_button(
+                        f"Copy selected ({sel_count})",
+                        aggregated_sel,
+                        height=80,
+                        disabled=(sel_count == 0)
+                    )
+                
+                # List
+                for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_subset):
+                    cols = st.columns([1, 24])
+                    with cols[0]:
+                        # Update global map on change
+                        def update_sel(c=cid, k=f"kb_sel_{cid}{key_suffix}"):
+                            selected_map[c] = st.session_state[k]
+                            st.session_state["kb_results_selected"] = selected_map
+                        
+                        st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}{key_suffix}", on_change=update_sel)
+                    with cols[1]:
+                        header = f"{path} :: {cname} — score {score:.3f}"
+                        with st.expander(header, expanded=(i == 0)):
+                            st.markdown(f"**{path}**\n\n{snippet}\n\n---\n\n{full_text}")
+
+            # If we have clusters, use tabs
+            if results_list and "kb_searcher" in st.session_state:
+                try:
+                    searcher = st.session_state["kb_searcher"]
+                    cids = [r[0] for r in results_list]
+                    clusters = searcher.cluster_search_results(cids, n_clusters=5)
+                    
+                    if len(clusters) > 1:
+                        st.caption("Auto-detected Contexts:")
+                        tab_labels = ["All"] + [f"{c['label']} ({c['count']})" for c in clusters]
+                        tabs = st.tabs(tab_labels)
+                        
+                        with tabs[0]:
+                            render_results(results_list, key_suffix="_all")
+                            
+                        for i, cluster in enumerate(clusters):
+                            with tabs[i+1]:
+                                cluster_cids = set(cluster["cids"])
+                                subset = [r for r in results_list if r[0] in cluster_cids]
+                                render_results(subset, key_suffix=f"_c{i}")
+                        
+                        # Skip default rendering
+                        results_list = [] 
+                except Exception:
+                    # Fallback
+                    pass
+
+            # Graph Visualization (Interactive)
+            if results_list:
+                with st.expander("Visualize Meta-Graph (Interactive)", expanded=False):
+                    try:
+                        searcher = st.session_state["kb_searcher"]
+                        # Use same list as clusters if filtered, else all
+                        viz_cids = [r[0] for r in (filtered_results or results_list)[:20]]
+                        clicked_node_id = render_interactive_graph(searcher, viz_cids)
+                        
+                        if clicked_node_id:
+                            # Refine Scope Logic
+                            st.info(f"Refining scope to: {clicked_node_id}")
+                            
+                            # If meta node clicked, find all docs linked to it
+                            if clicked_node_id.startswith("meta_"):
+                                # Parse type/name from id "meta_{type}_{name}"
+                                # But simpler: searcher doesn't have reverse index easily available without DB.
+                                # Use DB query.
+                                parts = clicked_node_id.split("_", 2)
+                                if len(parts) >= 3:
+                                    m_type, m_name = parts[1], parts[2]
+                                    # We need a reverse lookup function in db.py or just filter displayed results locally?
+                                    # Filtering displayed results locally is safer if we assume they are in the viz set.
+                                    # But better to fetch from DB for completeness.
+                                    # For now, let's just filter the *current* results list for those connected to this meta node.
+                                    
+                                    # Re-fetch meta map for all current results
+                                    meta_map = fetch_meta_nodes_for_chunks(get_engine(), [r[0] for r in results_list])
+                                    
+                                    subset = []
+                                    for r in results_list:
+                                        metas = meta_map.get(r[0], [])
+                                        # Check if this doc has the clicked meta node
+                                        if any(m[0] == m_type and m[1] == m_name for m in metas):
+                                            subset.append(r)
+                                    
+                                    if subset:
+                                        st.success(f"Found {len(subset)} documents for {m_name}")
+                                        render_results(subset, key_suffix=f"_graph_{clicked_node_id}")
+                                        # Stop processing further to show this filtered view at bottom
+                                    else:
+                                        st.warning("No documents in current search results match this node.")
+                            
+                            elif clicked_node_id.startswith("doc_"):
+                                cid = int(clicked_node_id.replace("doc_", ""))
+                                subset = [r for r in results_list if r[0] == cid]
+                                render_results(subset, key_suffix=f"_graph_{cid}")
+
+                    except Exception as e:
+                        st.error(f"Graph error: {e}")
+
             selected_map = st.session_state.get("kb_results_selected") or {}
             # Build aggregated text from only selected items BEFORE rendering list so the button sits above
             if results_list:
@@ -766,7 +996,7 @@ with manage_tab:
         run_now_submit = col2.form_submit_button("Run now", use_container_width=True)
 
     from apscheduler.schedulers.background import BackgroundScheduler
-    from apscheduler.executors.pool import ThreadPoolExecutor
+    # ThreadPoolExecutor not needed for interface-only scheduler
     from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
     from apscheduler.triggers.interval import IntervalTrigger
     from apscheduler.triggers.cron import CronTrigger
@@ -774,22 +1004,19 @@ with manage_tab:
     from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
     from kb.db import ensure_job, fetch_recent_runs, request_cancel_run
 
-    def _get_scheduler():
+    # Scheduler for UI (add/remove only, no execution)
+    def _get_scheduler_interface():
         jobstores = {'default': SQLAlchemyJobStore(url=get_database_url())}
-        executors = {'default': ThreadPoolExecutor(4)}
+        # No executors needed if we don't start it, but good to have defaults
         job_defaults = {'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 300}
-        return BackgroundScheduler(jobstores=jobstores, executors=executors, job_defaults=job_defaults)
-
-    def _ensure_sched_started():
-        if "ui_scheduler" not in st.session_state:
-            st.session_state["ui_scheduler"] = _get_scheduler()
-            st.session_state["ui_scheduler"].start()
+        return BackgroundScheduler(jobstores=jobstores, job_defaults=job_defaults)
 
     job_id = "ui_continuous_sync"
     if add_job_submit:
         try:
-            _ensure_sched_started()
-            sched = st.session_state["ui_scheduler"]
+            # We do NOT start the scheduler in the UI process.
+            # We just add the job to the store; the external scheduler service picks it up.
+            sched = _get_scheduler_interface()
             trigger = None
             if schedule_mode == "Daily":
                 t = st.session_state.get("sync_time", dt_time(2, 0))
@@ -835,8 +1062,7 @@ with manage_tab:
             if not in_dir or not os.path.isdir(in_dir):
                 st.error("Please provide a valid folder to sync")
             else:
-                _ensure_sched_started()
-                sched = st.session_state["ui_scheduler"]
+                sched = _get_scheduler_interface()
                 jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
                 # For one-off runs, SLA is not applicable; store None
                 ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None, None)
@@ -847,8 +1073,7 @@ with manage_tab:
 
     # Always show current jobs with human-friendly labels and selection, wrapped in a form to prevent flicker
     try:
-        _ensure_sched_started()
-        sched = st.session_state["ui_scheduler"]
+        sched = _get_scheduler_interface()
         jobs = sched.get_jobs()
         if not jobs:
             st.info("No scheduled jobs")

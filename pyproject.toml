@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "context-packager"
-version = "0.2.2"
+version = "0.2.3"
 description = "Convert documents to Markdown (MarkItDown), package with Repomix, and serve a Streamlit UI for copyable LLM context."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,7 +34,7 @@ context-scheduler = "resume_ui.scheduler_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["resume_ui", "hr_tools", "kb", "context_packager_data"]
-force-include = { "hr_tools/instruction.md" = "hr_tools/instruction.md", "context_packager_data/tiktoken_cache" = "context_packager_data/tiktoken_cache" }
+force-include = { "hr_tools/instruction.md" = "hr_tools/instruction.md" }
 
 [tool.hatch.build.targets.sdist]
 exclude = [

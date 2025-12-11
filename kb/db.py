@@ -64,6 +64,30 @@ def init_schema(engine: Engine) -> None:
 		conn.execute(
 			text(
 				"""
+				CREATE TABLE IF NOT EXISTS meta_nodes (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					type TEXT,
+					name TEXT,
+					normalized_name TEXT UNIQUE
+				)
+				"""
+			)
+		)
+		conn.execute(
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS chunk_meta_edges (
+					chunk_id INTEGER,
+					meta_node_id INTEGER,
+					weight REAL,
+					PRIMARY KEY (chunk_id, meta_node_id)
+				)
+				"""
+			)
+		)
+		conn.execute(
+			text(
+				"""
 				CREATE TABLE IF NOT EXISTS file_index (
 					path TEXT PRIMARY KEY,
 					sha256 TEXT,
@@ -488,6 +512,13 @@ def delete_chunks_by_path(engine: Engine, path: str) -> int:
         except Exception:
             return 0
 
+
+def fetch_chunk_ids_by_path(engine: Engine, path: str) -> List[int]:
+	"""Return chunk IDs for a given file path."""
+	with engine.begin() as conn:
+		rows = conn.execute(text("SELECT id FROM chunks WHERE path=:p"), {"p": path})
+		return [int(r[0]) for r in rows]
+
 def fetch_all_chunks(engine: Engine) -> List[Tuple[int, str, str, str]]:
 	"""Return list of (id, path, chunk_name, content)."""
 	with engine.begin() as conn:
@@ -547,6 +578,65 @@ def fetch_chunk_by_id(engine: Engine, chunk_id: int) -> Tuple[int, str, str, str
 		row = conn.execute(text("SELECT id, path, chunk_name, content FROM chunks WHERE id=:id"), {"id": int(chunk_id)}).fetchone()
 		return (row[0], row[1], row[2], row[3]) if row else None
 
+
+
+
+def upsert_meta_node(engine: Engine, node_type: str, name: str) -> int:
+	"""Upsert a meta node and return its ID."""
+	norm = f"{node_type}::{name.strip().lower()}"
+	with engine.begin() as conn:
+		# Check exist
+		row = conn.execute(text("SELECT id FROM meta_nodes WHERE normalized_name=:n"), {"n": norm}).fetchone()
+		if row:
+			return int(row[0])
+		
+		# Insert
+		res = conn.execute(
+			text("INSERT INTO meta_nodes(type, name, normalized_name) VALUES(:t, :n, :nn)"),
+			{"t": node_type, "n": name.strip(), "nn": norm}
+		)
+		# For SQLite/Postgres compatibility on returning ID
+		if res.lastrowid:
+			return int(res.lastrowid)
+		# Fallback fetch
+		row = conn.execute(text("SELECT id FROM meta_nodes WHERE normalized_name=:n"), {"n": norm}).fetchone()
+		return int(row[0])
+
+
+def link_chunk_to_meta(engine: Engine, chunk_id: int, meta_id: int, weight: float = 1.0) -> None:
+	"""Link a chunk to a meta node."""
+	with engine.begin() as conn:
+		conn.execute(
+			text(
+				"""
+				INSERT INTO chunk_meta_edges(chunk_id, meta_node_id, weight)
+				VALUES(:cid, :mid, :w)
+				ON CONFLICT(chunk_id, meta_node_id) DO UPDATE SET weight=excluded.weight
+				"""
+			),
+			{"cid": chunk_id, "mid": meta_id, "w": weight}
+		)
+
+def fetch_meta_nodes_for_chunks(engine: Engine, chunk_ids: List[int]) -> Dict[int, List[Tuple[str, str]]]:
+	"""Return {chunk_id: [(type, name), ...]}."""
+	if not chunk_ids:
+		return {}
+	ids_str = ",".join(str(i) for i in chunk_ids)
+	with engine.begin() as conn:
+		rows = conn.execute(
+			text(
+				f"""
+				SELECT e.chunk_id, m.type, m.name
+				FROM chunk_meta_edges e
+				JOIN meta_nodes m ON e.meta_node_id = m.id
+				WHERE e.chunk_id IN ({ids_str})
+				"""
+			)
+		)
+		res = {}
+		for cid, t, n in rows:
+			res.setdefault(cid, []).append((t, n))
+		return res
 
 
 def factory_reset_db() -> None:
