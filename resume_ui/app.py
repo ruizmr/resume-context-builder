@@ -24,13 +24,13 @@ from kb.artifacts import load_artifacts
 from kb.db import fetch_meta_nodes_for_chunks
 
 try:
-    from pyvis.network import Network
+    from streamlit_agraph import agraph, Node, Edge, Config
 except ImportError:
-    Network = None
+    agraph = None
 
 def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | None = None):
-    if not Network:
-        st.warning("pyvis not installed")
+    if not agraph:
+        st.warning("streamlit-agraph not installed")
         return None
 
     # Map cid -> internal idx
@@ -47,16 +47,15 @@ def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | N
     # Fetch Meta Info
     meta_map = fetch_meta_nodes_for_chunks(get_engine(), cids)
     
-    net = Network(height="500px", width="100%", bgcolor="#ffffff", font_color="black", cdn_resources="remote")
-    net.force_atlas_2based()
-    
+    nodes = []
+    edges = []
     added_nodes = set()
     
     # Define a color palette for clusters
     cluster_colors = ["#4b8fea", "#ff6b6b", "#51cf66", "#fcc419", "#ff922b", "#845ef7", "#e64980", "#20c997"]
 
     for cid in cids:
-        if cid not in added_nodes:
+        if str(cid) not in added_nodes:
             idx = cid_to_idx.get(cid)
             label = f"Doc {cid}"
             title = "Unknown"
@@ -72,12 +71,22 @@ def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | N
 
             if idx is not None:
                 path, name = searcher.meta[idx]
-                label = name
+                content = searcher.texts[idx] if idx < len(searcher.texts) else ""
+                label = _friendly_title(path, name, content)
+                # Truncate label if too long for vis
+                if len(label) > 15: label = label[:15] + ".."
                 title += f"{path}\n{name}"
             
-            # Use smaller nodes for docs
-            net.add_node(f"doc_{cid}", label=label, title=title, size=15, color=color, shape="box", group=group)
-            added_nodes.add(f"doc_{cid}")
+            nodes.append(Node(
+                id=str(cid), # ID must be string
+                label=label,
+                title=title,
+                size=20,
+                color=color,
+                group=group,
+                shape="box"
+            ))
+            added_nodes.add(str(cid))
             
             # Add Meta Nodes
             metas = meta_map.get(cid, [])
@@ -85,30 +94,62 @@ def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | N
                 m_id = f"meta_{m_type}_{m_name}"
                 if m_id not in added_nodes:
                     m_color = "#e9ecef" # Neutral for meta nodes
-                    net.add_node(m_id, label=m_name, title=f"{m_type}: {m_name}", size=10, color=m_color, shape="ellipse")
+                    # Meta node
+                    nodes.append(Node(
+                        id=m_id,
+                        label=m_name,
+                        title=f"{m_type}: {m_name}",
+                        size=10,
+                        color=m_color,
+                        shape="ellipse"
+                    ))
                     added_nodes.add(m_id)
                 
                 # Edge Doc -> Meta
-                net.add_edge(f"doc_{cid}", m_id, color="#e0e0e0")
+                edges.append(Edge(
+                    source=str(cid),
+                    target=m_id,
+                    color="#e0e0e0"
+                ))
 
-    # Generate graph html
+    config = Config(
+        width="100%",
+        height=500,
+        directed=False, 
+        physics=True, 
+        hierarchical=False,
+        nodeHighlightBehavior=True,
+        highlightColor="#F7A7A6",
+        collapsible=False
+    )
+
+    selection = agraph(nodes=nodes, edges=edges, config=config, key="interactive_kb_graph")
+    return selection
+
+def _friendly_title(path: str, chunk_name: str, content: str = "") -> str:
+    # Prefer first Markdown heading if present
     try:
-        tmp_name = f"graph_{uuid.uuid4().hex}.html"
-        path = Path(tempfile.gettempdir()) / tmp_name
-        net.save_graph(str(path))
-        html_content = path.read_text(encoding="utf-8")
-        # Cleanup
-        try:
-            path.unlink()
-        except Exception:
-            pass
-        
-        components.html(html_content, height=520, scrolling=True)
-    except Exception as e:
-        st.error(f"Graph generation error: {e}")
+        if content:
+            for line in content.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    return s[2:].strip()
+                if s.startswith("## "):
+                    return s[3:].strip()
+                if s and not s.startswith("#") and len(s) > 8:
+                    # fallback: first non-empty line with some length
+                    return s[:80]
+    except Exception:
+        pass
+    # Fallback to filename without noisy tokens
+    name = Path(path).name
+    base = name.rsplit(".", 1)[0]
+    cleaned = base.replace("_", " ").replace("-", " ")
+    cleaned = " ".join(part for part in cleaned.split() if not part.isupper() or len(part) <= 5)
+    return cleaned.strip() or chunk_name or name
 
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
-st.title("Context Packager")
+st.title("Context Packager v0.2.16")
 
 # Defaults designed to be portable on any machine
 default_pdf_dir = ""
@@ -351,6 +392,27 @@ with st.sidebar:
         rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
 
     st.divider()
+    
+    # Auto-Tune Active Params Display in Sidebar
+    if auto_tune and "kb_searcher" in st.session_state:
+        # Check if we have recent params from search
+        # We can't easily get the *last used* params unless stored in session
+        # But we can ask the optimizer for current suggestion
+        try:
+            opt = get_optimizer()
+            # This might differ slightly if exploration happened, but gives user an idea
+            # Ideally we capture this from the main search execution
+            if "last_search_params" in st.session_state:
+                disp_params = st.session_state["last_search_params"]
+            else:
+                disp_params = opt.suggest_parameters(exploration_prob=0.0) # Show exploitation params as baseline
+            
+            with st.expander("Auto-Tune Parameters", expanded=False):
+                st.json(disp_params)
+                st.caption("These parameters are automatically adjusted based on your feedback.")
+        except Exception:
+            pass
+
     st.caption("Instructions (optional)")
 
     @st.dialog("Edit instructions")
@@ -439,7 +501,7 @@ def render_copy_button(label: str, text: str, height: int = 110, disabled: bool 
     components.html(html, height=height)
 
 # Tabs
-home_tab, manage_tab = st.tabs(["Home", "Manage knowledge"])
+home_tab, package_tab, manage_tab = st.tabs(["Search", "Package", "Manage knowledge"])
 
 with home_tab:
     # Global search bar pinned at top (independent form)
@@ -519,9 +581,7 @@ with home_tab:
                 if auto_tune:
                     opt = get_optimizer()
                     params = opt.suggest_parameters()
-                    # Show active params
-                    with st.expander("Auto-Tune Active Parameters", expanded=False):
-                        st.json(params)
+                    st.session_state["last_search_params"] = params
                 else:
                     params = {
                         "kb_top_k": top_k,
@@ -644,7 +704,8 @@ with home_tab:
                 
                 # List
                 for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_subset):
-                    cols = st.columns([1, 2, 21])
+                    # Layout: Checkbox | Content (Expandable) | Feedback
+                    cols = st.columns([1, 20, 2])
                     with cols[0]:
                         # Update global map on change
                         def update_sel(c=cid, k=f"kb_sel_{cid}{key_suffix}"):
@@ -652,24 +713,26 @@ with home_tab:
                             st.session_state["kb_results_selected"] = selected_map
                         
                         st.checkbox("Select", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}{key_suffix}", on_change=update_sel, label_visibility="collapsed")
+                    
                     with cols[1]:
-                         # Feedback buttons (small)
-                         subc = st.columns(2)
+                        header = f"{path} :: {cname} — score {score:.3f}"
+                        with st.expander(header, expanded=(i == 0)):
+                            st.markdown(f"**{path}**\n\n{snippet}\n\n---\n\n{full_text}")
+                            
+                    with cols[2]:
+                         # Feedback buttons (small vertical stack or horizontal)
                          # Use current query from state
                          curr_q = st.session_state.get("q_top", "")
-                         if subc[0].button("👍", key=f"fb_up_{cid}{key_suffix}", help="More like this"):
+                         if st.button("👍", key=f"fb_up_{cid}{key_suffix}", help="More like this", use_container_width=True):
                               record_feedback(curr_q, cid, 1.0)
-                              # Update optimizer if auto-tune is active (or just always update if we can map it)
                               if auto_tune:
                                   try:
                                       opt = get_optimizer()
-                                      # We use the LAST used params for this query if possible, or current recommendation
-                                      # Ideally we'd link feedback to specific search_history ID, but loose coupling works for MCTS aggregation
                                       opt.update(params, 1.0) 
                                   except Exception:
                                       pass
                               st.toast("Recorded: More like this")
-                         if subc[1].button("👎", key=f"fb_dn_{cid}{key_suffix}", help="Less like this"):
+                         if st.button("👎", key=f"fb_dn_{cid}{key_suffix}", help="Less like this", use_container_width=True):
                               record_feedback(curr_q, cid, -1.0)
                               if auto_tune:
                                   try:
@@ -678,10 +741,6 @@ with home_tab:
                                   except Exception:
                                       pass
                               st.toast("Recorded: Less like this")
-                    with cols[2]:
-                        header = f"{path} :: {cname} — score {score:.3f}"
-                        with st.expander(header, expanded=(i == 0)):
-                            st.markdown(f"**{path}**\n\n{snippet}\n\n---\n\n{full_text}")
 
             # Contextual Ambiguity: Auto-Clustering
             # We calculate clusters to color the graph, but do not filter by them in the list.
@@ -702,13 +761,65 @@ with home_tab:
                     try:
                         searcher = st.session_state["kb_searcher"]
                         viz_cids = [r[0] for r in results_list[:40]] # Limit to 40 nodes for performance
-                        render_interactive_graph(searcher, viz_cids, clusters=clusters)
+                        selection = render_interactive_graph(searcher, viz_cids, clusters=clusters)
+                        
+                        # Handle selection drill-down
+                        if selection:
+                            st.divider()
+                            st.caption(f"Graph Selection: {selection}")
+                            
+                            # Determine if selection is a Doc or Meta Node
+                            # Doc IDs are numeric strings, Meta IDs start with "meta_"
+                            if selection.startswith("meta_"):
+                                # Show context for this keyword
+                                parts = selection.split("_", 2) # meta_type_name
+                                if len(parts) >= 3:
+                                    m_type, m_name = parts[1], parts[2]
+                                    st.markdown(f"**Context for '{m_name}'**")
+                                    # Find docs connected to this meta node in the current results
+                                    # We can iterate results_list and check if text contains m_name
+                                    # (Simplification: robust way would be querying edges, but we have text handy)
+                                    count = 0
+                                    for cid, score, path, cname, snippet, full_text in results_list:
+                                        if m_name.lower() in full_text.lower():
+                                            with st.expander(f"{path} :: {cname}", expanded=(count==0)):
+                                                # Highlight the term
+                                                highlit = full_text.replace(m_name, f"**{m_name}**").replace(m_name.title(), f"**{m_name.title()}**")
+                                                # Show a snippet around the term
+                                                try:
+                                                    idx = highlit.lower().find(m_name.lower())
+                                                    start = max(0, idx - 100)
+                                                    end = min(len(highlit), idx + 300)
+                                                    st.markdown(f"...{highlit[start:end]}...")
+                                                except Exception:
+                                                    st.markdown(highlit[:400])
+                                            count += 1
+                                            if count >= 5: break
+                            elif selection.isdigit():
+                                # Show Doc details
+                                cid = int(selection)
+                                # Find in results or fetch
+                                found = False
+                                for r in results_list:
+                                    if r[0] == cid:
+                                        st.markdown(f"**Selected Document: {r[2]}**")
+                                        st.text_area("Full Content", r[5], height=200)
+                                        found = True
+                                        break
+                                if not found:
+                                    # fetch fresh
+                                    row = fetch_chunk_by_id(get_engine(), cid)
+                                    if row:
+                                        st.markdown(f"**Selected Document: {row[1]}**")
+                                        st.text_area("Full Content", row[3], height=200)
+
                     except Exception as e:
                         st.error(f"Graph error: {e}")
         else:
             st.info("No search results found")
 
     # Input and packaging live only on Home tab
+with package_tab:
     st.subheader("Input")
     uploaded_files = st.file_uploader("Upload files or ZIP", type=None, accept_multiple_files=True, key="home_file_uploader")
     fallback_dir_main = st.text_input("Or enter a directory path (optional)", value="", key="home_fallback_dir")
@@ -903,340 +1014,344 @@ with home_tab:
 with manage_tab:
     st.subheader("Manage knowledge base")
     engine = get_engine()
-    st.divider()
-    st.subheader("Enable continuous folder sync")
+    
+    tab_sched, tab_browse, tab_sys = st.tabs(["Scheduler", "Browse & Edit", "System"])
 
-    # Redesigned scheduler: single add-job form + run-now
-    with st.form("add_job_form", clear_on_submit=False):
-        col_a, col_b = st.columns([3, 2])
-        with col_a:
-            sync_folder = st.text_input("Folder to sync", key="sync_folder", placeholder="/path/to/folder")
-            if sync_folder and not os.path.isdir(sync_folder):
-                st.caption("Invalid folder path")
-            md_out_target = st.text_input("Markdown output dir (optional)", key="sync_md_out")
-            if md_out_target and not os.path.isdir(md_out_target):
-                st.caption("Invalid folder path")
-        with col_b:
-            schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Weekly", "Monthly", "Cron (advanced)"], key="sync_mode")
-            interval_minutes = int(st.number_input("Interval (minutes)", min_value=1, step=1, key="sync_interval")) if schedule_mode == "Every X minutes" else 1440
-            cron_expr = st.text_input("Cron (min hr dom mon dow)", key="sync_cron") if schedule_mode == "Cron (advanced)" else st.session_state.get("sync_cron", "0 2 * * *")
-            if schedule_mode == "Daily":
-                st.time_input("Time of day", key="sync_time")
-            elif schedule_mode == "Weekly":
-                days_options = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-                st.multiselect("Days of week", options=days_options, key="sync_weekdays")
-                st.time_input("Time of day", key="sync_time_weekly")
-            elif schedule_mode == "Monthly":
-                st.number_input("Day of month", min_value=1, max_value=31, step=1, key="sync_dom")
-                st.time_input("Time of day", key="sync_time_monthly")
-        col1, col2 = st.columns([1,1])
-        add_job_submit = col1.form_submit_button("Add job", use_container_width=True)
-        run_now_submit = col2.form_submit_button("Run now", use_container_width=True)
+    with tab_sched:
+        st.subheader("Enable continuous folder sync")
 
-    from apscheduler.schedulers.background import BackgroundScheduler
-    # ThreadPoolExecutor not needed for interface-only scheduler
-    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-    from apscheduler.triggers.interval import IntervalTrigger
-    from apscheduler.triggers.cron import CronTrigger
-    from apscheduler.triggers.date import DateTrigger
-    from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
-    from kb.db import ensure_job, fetch_recent_runs, request_cancel_run
+        # Redesigned scheduler: single add-job form + run-now
+        with st.form("add_job_form", clear_on_submit=False):
+            col_a, col_b = st.columns([3, 2])
+            with col_a:
+                sync_folder = st.text_input("Folder to sync", key="sync_folder", placeholder="/path/to/folder")
+                if sync_folder and not os.path.isdir(sync_folder):
+                    st.caption("Invalid folder path")
+                md_out_target = st.text_input("Markdown output dir (optional)", key="sync_md_out")
+                if md_out_target and not os.path.isdir(md_out_target):
+                    st.caption("Invalid folder path")
+            with col_b:
+                schedule_mode = st.selectbox("Schedule", options=["Daily", "Every X minutes", "Weekly", "Monthly", "Cron (advanced)"], key="sync_mode")
+                interval_minutes = int(st.number_input("Interval (minutes)", min_value=1, step=1, key="sync_interval")) if schedule_mode == "Every X minutes" else 1440
+                cron_expr = st.text_input("Cron (min hr dom mon dow)", key="sync_cron") if schedule_mode == "Cron (advanced)" else st.session_state.get("sync_cron", "0 2 * * *")
+                if schedule_mode == "Daily":
+                    st.time_input("Time of day", key="sync_time")
+                elif schedule_mode == "Weekly":
+                    days_options = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                    st.multiselect("Days of week", options=days_options, key="sync_weekdays")
+                    st.time_input("Time of day", key="sync_time_weekly")
+                elif schedule_mode == "Monthly":
+                    st.number_input("Day of month", min_value=1, max_value=31, step=1, key="sync_dom")
+                    st.time_input("Time of day", key="sync_time_monthly")
+            col1, col2 = st.columns([1,1])
+            add_job_submit = col1.form_submit_button("Add job", use_container_width=True)
+            run_now_submit = col2.form_submit_button("Run now", use_container_width=True)
 
-    # Scheduler for UI (add/remove only, no execution)
-    def _get_scheduler_interface():
-        jobstores = {'default': SQLAlchemyJobStore(url=get_database_url())}
-        # No executors needed if we don't start it, but good to have defaults
-        job_defaults = {'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 300}
-        return BackgroundScheduler(jobstores=jobstores, job_defaults=job_defaults)
+        from apscheduler.schedulers.background import BackgroundScheduler
+        # ThreadPoolExecutor not needed for interface-only scheduler
+        from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+        from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.date import DateTrigger
+        from resume_ui.scheduler_cli import _job_ingest as _job_ingest_fn
+        from kb.db import ensure_job, fetch_recent_runs, request_cancel_run
 
-    job_id = "ui_continuous_sync"
-    if add_job_submit:
-        try:
-            # We do NOT start the scheduler in the UI process.
-            # We just add the job to the store; the external scheduler service picks it up.
-            sched = _get_scheduler_interface()
-            trigger = None
-            if schedule_mode == "Daily":
-                t = st.session_state.get("sync_time", dt_time(2, 0))
-                trigger = CronTrigger(hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
-                human_sched = f"Daily at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
-            elif schedule_mode == "Weekly":
-                t = st.session_state.get("sync_time_weekly", dt_time(2, 0))
-                days = st.session_state.get("sync_weekdays", ["Mon"]) or ["Mon"]
-                dow_map = {"Mon": "mon", "Tue": "tue", "Wed": "wed", "Thu": "thu", "Fri": "fri", "Sat": "sat", "Sun": "sun"}
-                day_str = ",".join([dow_map.get(d, "mon") for d in days])
-                trigger = CronTrigger(day_of_week=day_str, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
-                human_sched = f"Weekly on {', '.join(days)} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
-            elif schedule_mode == "Monthly":
-                t = st.session_state.get("sync_time_monthly", dt_time(2, 0))
-                dom = int(st.session_state.get("sync_dom", 1))
-                trigger = CronTrigger(day=dom, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
-                human_sched = f"Monthly on day {dom} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
-            elif schedule_mode == "Every X minutes":
-                trigger = IntervalTrigger(minutes=int(interval_minutes))
-                human_sched = f"Every {int(interval_minutes)} minute(s)"
-            else:
-                trigger = CronTrigger.from_crontab(str(cron_expr))
-                human_sched = f"Cron: {cron_expr}"
-            # Implied SLA fixed to 5 minutes
-            implied_sla_min = 5
+        # Scheduler for UI (add/remove only, no execution)
+        def _get_scheduler_interface():
+            jobstores = {'default': SQLAlchemyJobStore(url=get_database_url())}
+            # No executors needed if we don't start it, but good to have defaults
+            job_defaults = {'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 300}
+            return BackgroundScheduler(jobstores=jobstores, job_defaults=job_defaults)
 
-            in_dir = sync_folder.strip()
-            if not in_dir:
-                st.error("Please provide a folder to sync")
-            else:
-                base = Path(in_dir).name or "folder"
-                jid = f"sync::{hashlib.sha1(in_dir.encode('utf-8')).hexdigest()[:8]}::{base}"
-                jname = f"{base} — {human_sched}"
-                ensure_job(jid, jname, in_dir, md_out_target or None, implied_sla_min)
-                sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None, jid, jname], trigger=trigger, replace_existing=True)
-                st.success("Continuous sync enabled")
-        except Exception as e:
-            st.error(f"Failed to start: {e}")
-
-    if run_now_submit:
-        try:
-            in_dir = sync_folder.strip()
-            if not in_dir or not os.path.isdir(in_dir):
-                st.error("Please provide a valid folder to sync")
-            else:
+        job_id = "ui_continuous_sync"
+        if add_job_submit:
+            try:
+                # We do NOT start the scheduler in the UI process.
+                # We just add the job to the store; the external scheduler service picks it up.
                 sched = _get_scheduler_interface()
-                jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
-                # For one-off runs, SLA is not applicable; store None
-                ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None, None)
-                sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None, jid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
-                st.success("Queued run in background")
-        except Exception as e:
-            st.error(f"Run failed: {e}")
+                trigger = None
+                if schedule_mode == "Daily":
+                    t = st.session_state.get("sync_time", dt_time(2, 0))
+                    trigger = CronTrigger(hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                    human_sched = f"Daily at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
+                elif schedule_mode == "Weekly":
+                    t = st.session_state.get("sync_time_weekly", dt_time(2, 0))
+                    days = st.session_state.get("sync_weekdays", ["Mon"]) or ["Mon"]
+                    dow_map = {"Mon": "mon", "Tue": "tue", "Wed": "wed", "Thu": "thu", "Fri": "fri", "Sat": "sat", "Sun": "sun"}
+                    day_str = ",".join([dow_map.get(d, "mon") for d in days])
+                    trigger = CronTrigger(day_of_week=day_str, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                    human_sched = f"Weekly on {', '.join(days)} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
+                elif schedule_mode == "Monthly":
+                    t = st.session_state.get("sync_time_monthly", dt_time(2, 0))
+                    dom = int(st.session_state.get("sync_dom", 1))
+                    trigger = CronTrigger(day=dom, hour=int(getattr(t, 'hour', 2)), minute=int(getattr(t, 'minute', 0)))
+                    human_sched = f"Monthly on day {dom} at {int(getattr(t,'hour',2)):02d}:{int(getattr(t,'minute',0)):02d}"
+                elif schedule_mode == "Every X minutes":
+                    trigger = IntervalTrigger(minutes=int(interval_minutes))
+                    human_sched = f"Every {int(interval_minutes)} minute(s)"
+                else:
+                    trigger = CronTrigger.from_crontab(str(cron_expr))
+                    human_sched = f"Cron: {cron_expr}"
+                # Implied SLA fixed to 5 minutes
+                implied_sla_min = 5
 
-    # Always show current jobs with human-friendly labels and selection, wrapped in a form to prevent flicker
-    try:
-        sched = _get_scheduler_interface()
-        jobs = sched.get_jobs()
-        if not jobs:
-            st.info("No scheduled jobs")
-        else:
-            labels = {}
-            options = []
-            for j in jobs:
-                folder = None
-                try:
-                    if j.args and len(j.args) >= 1 and isinstance(j.args[0], str):
-                        folder = Path(j.args[0]).name
-                except Exception:
+                in_dir = sync_folder.strip()
+                if not in_dir:
+                    st.error("Please provide a folder to sync")
+                else:
+                    base = Path(in_dir).name or "folder"
+                    jid = f"sync::{hashlib.sha1(in_dir.encode('utf-8')).hexdigest()[:8]}::{base}"
+                    jname = f"{base} — {human_sched}"
+                    ensure_job(jid, jname, in_dir, md_out_target or None, implied_sla_min)
+                    sched.add_job(_job_ingest_fn, id=jid, name=jname, args=[in_dir, md_out_target or None, jid, jname], trigger=trigger, replace_existing=True)
+                    st.success("Continuous sync enabled")
+            except Exception as e:
+                st.error(f"Failed to start: {e}")
+
+        if run_now_submit:
+            try:
+                in_dir = sync_folder.strip()
+                if not in_dir or not os.path.isdir(in_dir):
+                    st.error("Please provide a valid folder to sync")
+                else:
+                    sched = _get_scheduler_interface()
+                    jid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
+                    # For one-off runs, SLA is not applicable; store None
+                    ensure_job(jid, f"One-off run — {Path(in_dir).name}", in_dir, md_out_target or None, None)
+                    sched.add_job(_job_ingest_fn, id=jid, args=[in_dir, md_out_target or None, jid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                    st.success("Queued run in background")
+            except Exception as e:
+                st.error(f"Run failed: {e}")
+
+        # Always show current jobs with human-friendly labels and selection, wrapped in a form to prevent flicker
+        try:
+            sched = _get_scheduler_interface()
+            jobs = sched.get_jobs()
+            if not jobs:
+                st.info("No scheduled jobs")
+            else:
+                labels = {}
+                options = []
+                for j in jobs:
                     folder = None
-                label = j.name or f"{folder or j.id} — {str(j.trigger)}"
-                if j.next_run_time:
-                    label = f"{label} — next {j.next_run_time}"
-                labels[j.id] = label
-                options.append(j.id)
-            st.caption("Scheduled jobs")
-            with st.form("jobs_form", clear_on_submit=False):
-                selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
-                col_rm, col_run_sel = st.columns([1,1])
-                rm_pressed = col_rm.form_submit_button("Remove selected", disabled=(not selected_jobs), use_container_width=True)
-                run_pressed = col_run_sel.form_submit_button("Run selected now", disabled=(not selected_jobs), use_container_width=True)
-                purge_pressed = st.form_submit_button("Purge all jobs", use_container_width=True)
-                if rm_pressed:
-                    removed = 0
-                    for jid in list(selected_jobs):
-                        try:
-                            sched.remove_job(jid)
-                            removed += 1
-                        except Exception:
-                            pass
-                    if removed > 0:
-                        st.success(f"Removed {removed} job(s)")
-                    else:
-                        st.info("No jobs removed")
-                if run_pressed:
-                    queued = 0
-                    for jid in list(selected_jobs):
-                        try:
-                            j = sched.get_job(jid)
-                            if j and j.args and isinstance(j.args[0], str):
-                                in_dir = j.args[0]
-                                out_dir = j.args[1] if len(j.args) > 1 else None
-                                rqid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
-                                ensure_job(rqid, f"One-off run — {Path(in_dir).name}", in_dir, out_dir)
-                                sched.add_job(_job_ingest_fn, id=rqid, args=[in_dir, out_dir, rqid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
-                                queued += 1
-                        except Exception:
-                            pass
-                    if queued > 0:
-                        st.success(f"Queued {queued} job(s)")
-                    else:
-                        st.info("No jobs queued")
-                if purge_pressed:
                     try:
-                        for jid in list(options):
+                        if j.args and len(j.args) >= 1 and isinstance(j.args[0], str):
+                            folder = Path(j.args[0]).name
+                    except Exception:
+                        folder = None
+                    label = j.name or f"{folder or j.id} — {str(j.trigger)}"
+                    if j.next_run_time:
+                        label = f"{label} — next {j.next_run_time}"
+                    labels[j.id] = label
+                    options.append(j.id)
+                st.caption("Scheduled jobs")
+                with st.form("jobs_form", clear_on_submit=False):
+                    selected_jobs = st.multiselect("Select jobs", options=options, format_func=lambda jid: labels.get(jid, jid), key="ui_jobs_multi")
+                    col_rm, col_run_sel = st.columns([1,1])
+                    rm_pressed = col_rm.form_submit_button("Remove selected", disabled=(not selected_jobs), use_container_width=True)
+                    run_pressed = col_run_sel.form_submit_button("Run selected now", disabled=(not selected_jobs), use_container_width=True)
+                    purge_pressed = st.form_submit_button("Purge all jobs", use_container_width=True)
+                    if rm_pressed:
+                        removed = 0
+                        for jid in list(selected_jobs):
                             try:
                                 sched.remove_job(jid)
+                                removed += 1
                             except Exception:
                                 pass
-                        st.success("Purged all jobs")
-                    except Exception as e:
-                        st.error(f"Failed to purge: {e}")
-    except Exception as e:
-        st.error(f"Failed to list/remove jobs: {e}")
-
-    # Removed single remove button; handled via multiselect above
-
-    st.divider()
-    st.subheader("Recent runs")
-    if st.button("Refresh", use_container_width=False):
-        st.rerun()
-    try:
-        runs = fetch_recent_runs(limit=20)
-        if not runs:
-            st.caption("No runs yet")
-        else:
-            for rid, jid, in_dir, out_dir, status, progress, processed, total, chunks, started_at, finished_at, last_msg, log_tail, cancel_req, err in runs:
-                with st.container():
-                    st.markdown(f"**{status.upper()}** — {progress}% — {Path(in_dir).name}  ")
-                    st.caption(f"Run {rid} — job {jid or '-'} — started {started_at}{' — finished ' + str(finished_at) if finished_at else ''}")
-                    cols = st.columns([3,1,1])
-                    with cols[0]:
-                        st.progress(int(progress or 0), text=last_msg or "")
-                        if log_tail:
-                            with st.expander("View recent log"):
-                                st.code(str(log_tail))
-                    with cols[1]:
-                        if status in ("running", "queued") and not cancel_req:
-                            if st.button("Cancel", key=f"cancel_{rid}", use_container_width=True):
+                        if removed > 0:
+                            st.success(f"Removed {removed} job(s)")
+                        else:
+                            st.info("No jobs removed")
+                    if run_pressed:
+                        queued = 0
+                        for jid in list(selected_jobs):
+                            try:
+                                j = sched.get_job(jid)
+                                if j and j.args and isinstance(j.args[0], str):
+                                    in_dir = j.args[0]
+                                    out_dir = j.args[1] if len(j.args) > 1 else None
+                                    rqid = f"run::{hashlib.sha1((in_dir + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]}"
+                                    ensure_job(rqid, f"One-off run — {Path(in_dir).name}", in_dir, out_dir)
+                                    sched.add_job(_job_ingest_fn, id=rqid, args=[in_dir, out_dir, rqid, f"One-off run — {Path(in_dir).name}"], trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=1)))
+                                    queued += 1
+                            except Exception:
+                                pass
+                        if queued > 0:
+                            st.success(f"Queued {queued} job(s)")
+                        else:
+                            st.info("No jobs queued")
+                    if purge_pressed:
+                        try:
+                            for jid in list(options):
                                 try:
-                                    request_cancel_run(rid)
-                                    st.success("Cancellation requested")
-                                except Exception as e:
-                                    st.error(f"Cancel failed: {e}")
-                    with cols[2]:
-                        st.caption(f"Files {processed}/{total}")
-                        if chunks is not None:
-                            st.caption(f"Chunks {int(chunks)}")
-                        if err:
-                            st.caption(f"Error: {err}")
-    except Exception as e:
-        st.error(f"Failed to load runs: {e}")
-    st.subheader("Edit and delete knowledge")
-
-    def _friendly_title(path: str, chunk_name: str, content: str) -> str:
-        # Prefer first Markdown heading if present
-        try:
-            for line in content.splitlines():
-                s = line.strip()
-                if s.startswith("# "):
-                    return s[2:].strip()
-                if s.startswith("## "):
-                    return s[3:].strip()
-                if s and not s.startswith("#") and len(s) > 8:
-                    # fallback: first non-empty line with some length
-                    return s[:80]
-        except Exception:
-            pass
-        # Fallback to filename without noisy tokens
-        name = Path(path).name
-        base = name.rsplit(".", 1)[0]
-        cleaned = base.replace("_", " ").replace("-", " ")
-        cleaned = " ".join(part for part in cleaned.split() if not part.isupper() or len(part) <= 5)
-        return cleaned.strip() or chunk_name or name
-
-    # Controls
-    colf, colp, colr = st.columns([4, 1, 1])
-    with colf:
-        filter_text = st.text_input("Filter (path, name, or content)", key="kb_m_filter")
-    with colp:
-        rows_per_page = st.number_input("Rows/page", min_value=5, max_value=200, step=5, key="kb_m_rpp")
-    with colr:
-        if "kb_m_page" not in st.session_state:
-            st.session_state["kb_m_page"] = 1
-        page = st.number_input("Page", min_value=1, value=int(st.session_state["kb_m_page"]), step=1)
-        st.session_state["kb_m_page"] = int(page)
-
-    like = f"%{st.session_state.get('kb_m_filter','')}%" if st.session_state.get('kb_m_filter') else None
-    total = count_chunks(engine, like)
-    max_page = max(1, (total + int(rows_per_page) - 1) // int(rows_per_page))
-    st.caption(f"{total} item(s) — page {st.session_state['kb_m_page']} of {max_page}")
-    if st.session_state["kb_m_page"] > max_page:
-        st.session_state["kb_m_page"] = max_page
-
-    offset = (st.session_state["kb_m_page"] - 1) * int(rows_per_page)
-    rows = fetch_chunks(engine, limit=int(rows_per_page), offset=int(offset), like=like)
-
-    # Selection state
-    if "kb_m_selected" not in st.session_state:
-        st.session_state["kb_m_selected"] = []
-
-    # Build dropdown options for this page (id -> label)
-    page_options = []
-    for rid, path, cname, content in rows:
-        title = _friendly_title(path, cname, content)
-        label = f"{title} — {Path(path).name} :: {cname}"
-        page_options.append((rid, label))
-    option_labels = {rid: label for rid, label in page_options}
-
-    # Searchable multiselect (limited to current page for performance), wrapped in a form to reduce reruns
-    with st.form("kb_manage_form", clear_on_submit=False):
-        selected_ids = st.multiselect(
-            "Select items (current page)",
-            options=[rid for rid, _ in page_options],
-            default=[rid for rid in st.session_state.get("kb_m_selected", []) if any(rid == rid2 for rid2, _ in page_options)],
-            format_func=lambda rid: option_labels.get(rid, str(rid)),
-            key="kb_m_multi",
-        )
-        submit_del = st.form_submit_button("Apply selection")
-    st.session_state["kb_m_selected"] = list(selected_ids)
-
-    # Auto preview first selected, with prev/next controls if multiple
-    if st.session_state["kb_m_selected"]:
-        sel_ids = st.session_state["kb_m_selected"]
-        idx = st.session_state.get("kb_m_prev_idx", 0)
-        idx = max(0, min(idx, len(sel_ids) - 1))
-        cols_nav = st.columns([1, 3, 1])
-        with cols_nav[0]:
-            if st.button("◀ Prev", disabled=(idx <= 0)):
-                st.session_state["kb_m_prev_idx"] = max(0, idx - 1)
-                st.rerun()
-        with cols_nav[2]:
-            if st.button("Next ▶", disabled=(idx >= len(sel_ids) - 1)):
-                st.session_state["kb_m_prev_idx"] = min(len(sel_ids) - 1, idx + 1)
-                st.rerun()
-
-        current_id = sel_ids[idx]
-        row = fetch_chunk_by_id(engine, int(current_id))
-        if row:
-            _rid, path, cname, content = row
-            st.caption(f"{path} :: {cname}")
-            st.text_area("Content", content, height=360)
-
-    del_count = len(st.session_state["kb_m_selected"])
-    with st.form("kb_delete_form", clear_on_submit=False):
-        btn_del = st.form_submit_button(f"Delete selected ({del_count})", disabled=(del_count == 0))
-    if btn_del:
-        try:
-            n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
-            st.success(f"Deleted {n} item(s)")
-            st.session_state["kb_m_selected"] = []
-            st.session_state.pop("kb_m_prev_idx", None)
-            # Invalidate search cache
-            st.session_state.pop("kb_searcher", None)
-            st.session_state.pop("kb_searcher_docs_len", None)
-            st.rerun()
+                                    sched.remove_job(jid)
+                                except Exception:
+                                    pass
+                            st.success("Purged all jobs")
+                        except Exception as e:
+                            st.error(f"Failed to purge: {e}")
         except Exception as e:
-            st.error(f"Delete failed: {e}")
+            st.error(f"Failed to list/remove jobs: {e}")
 
-    st.divider()
-    st.subheader("Danger zone")
-    st.caption("Factory reset DB: wipes jobs and KB tables. This cannot be undone.")
-    with st.form("factory_reset_form", clear_on_submit=False):
-        confirm = st.text_input("Type RESET to confirm", key="factory_reset_confirm")
-        do_reset = st.form_submit_button("Factory reset DB")
-    if do_reset:
-        if (st.session_state.get("factory_reset_confirm", "").strip().upper() != "RESET"):
-            st.error("Please type RESET to confirm.")
-        else:
+        # Removed single remove button; handled via multiselect above
+
+        st.subheader("Recent runs")
+        if st.button("Refresh", use_container_width=False):
+            st.rerun()
+        try:
+            runs = fetch_recent_runs(limit=20)
+            if not runs:
+                st.caption("No runs yet")
+            else:
+                for rid, jid, in_dir, out_dir, status, progress, processed, total, chunks, started_at, finished_at, last_msg, log_tail, cancel_req, err in runs:
+                    with st.container():
+                        st.markdown(f"**{status.upper()}** — {progress}% — {Path(in_dir).name}  ")
+                        st.caption(f"Run {rid} — job {jid or '-'} — started {started_at}{' — finished ' + str(finished_at) if finished_at else ''}")
+                        cols = st.columns([3,1,1])
+                        with cols[0]:
+                            st.progress(int(progress or 0), text=last_msg or "")
+                            if log_tail:
+                                with st.expander("View recent log"):
+                                    st.code(str(log_tail))
+                        with cols[1]:
+                            if status in ("running", "queued") and not cancel_req:
+                                if st.button("Cancel", key=f"cancel_{rid}", use_container_width=True):
+                                    try:
+                                        request_cancel_run(rid)
+                                        st.success("Cancellation requested")
+                                    except Exception as e:
+                                        st.error(f"Cancel failed: {e}")
+                        with cols[2]:
+                            st.caption(f"Files {processed}/{total}")
+                            if chunks is not None:
+                                st.caption(f"Chunks {int(chunks)}")
+                            if err:
+                                st.caption(f"Error: {err}")
+        except Exception as e:
+            st.error(f"Failed to load runs: {e}")
+    
+    with tab_browse:
+        st.subheader("Edit and delete knowledge")
+
+        def _friendly_title(path: str, chunk_name: str, content: str) -> str:
+            # Prefer first Markdown heading if present
             try:
-                from kb.db import factory_reset_db
-                factory_reset_db()
-                st.success("Database reset complete")
+                for line in content.splitlines():
+                    s = line.strip()
+                    if s.startswith("# "):
+                        return s[2:].strip()
+                    if s.startswith("## "):
+                        return s[3:].strip()
+                    if s and not s.startswith("#") and len(s) > 8:
+                        # fallback: first non-empty line with some length
+                        return s[:80]
+            except Exception:
+                pass
+            # Fallback to filename without noisy tokens
+            name = Path(path).name
+            base = name.rsplit(".", 1)[0]
+            cleaned = base.replace("_", " ").replace("-", " ")
+            cleaned = " ".join(part for part in cleaned.split() if not part.isupper() or len(part) <= 5)
+            return cleaned.strip() or chunk_name or name
+
+        # Controls
+        colf, colp, colr = st.columns([4, 1, 1])
+        with colf:
+            filter_text = st.text_input("Filter (path, name, or content)", key="kb_m_filter")
+        with colp:
+            rows_per_page = st.number_input("Rows/page", min_value=5, max_value=200, step=5, key="kb_m_rpp")
+        with colr:
+            if "kb_m_page" not in st.session_state:
+                st.session_state["kb_m_page"] = 1
+            page = st.number_input("Page", min_value=1, value=int(st.session_state["kb_m_page"]), step=1)
+            st.session_state["kb_m_page"] = int(page)
+
+        like = f"%{st.session_state.get('kb_m_filter','')}%" if st.session_state.get('kb_m_filter') else None
+        total = count_chunks(engine, like)
+        max_page = max(1, (total + int(rows_per_page) - 1) // int(rows_per_page))
+        st.caption(f"{total} item(s) — page {st.session_state['kb_m_page']} of {max_page}")
+        if st.session_state["kb_m_page"] > max_page:
+            st.session_state["kb_m_page"] = max_page
+
+        offset = (st.session_state["kb_m_page"] - 1) * int(rows_per_page)
+        rows = fetch_chunks(engine, limit=int(rows_per_page), offset=int(offset), like=like)
+
+        # Selection state
+        if "kb_m_selected" not in st.session_state:
+            st.session_state["kb_m_selected"] = []
+
+        # Build dropdown options for this page (id -> label)
+        page_options = []
+        for rid, path, cname, content in rows:
+            title = _friendly_title(path, cname, content)
+            label = f"{title} — {Path(path).name} :: {cname}"
+            page_options.append((rid, label))
+        option_labels = {rid: label for rid, label in page_options}
+
+        # Searchable multiselect (limited to current page for performance), wrapped in a form to reduce reruns
+        with st.form("kb_manage_form", clear_on_submit=False):
+            selected_ids = st.multiselect(
+                "Select items (current page)",
+                options=[rid for rid, _ in page_options],
+                default=[rid for rid in st.session_state.get("kb_m_selected", []) if any(rid == rid2 for rid2, _ in page_options)],
+                format_func=lambda rid: option_labels.get(rid, str(rid)),
+                key="kb_m_multi",
+            )
+            submit_del = st.form_submit_button("Apply selection")
+        st.session_state["kb_m_selected"] = list(selected_ids)
+
+        # Auto preview first selected, with prev/next controls if multiple
+        if st.session_state["kb_m_selected"]:
+            sel_ids = st.session_state["kb_m_selected"]
+            idx = st.session_state.get("kb_m_prev_idx", 0)
+            idx = max(0, min(idx, len(sel_ids) - 1))
+            cols_nav = st.columns([1, 3, 1])
+            with cols_nav[0]:
+                if st.button("◀ Prev", disabled=(idx <= 0)):
+                    st.session_state["kb_m_prev_idx"] = max(0, idx - 1)
+                    st.rerun()
+            with cols_nav[2]:
+                if st.button("Next ▶", disabled=(idx >= len(sel_ids) - 1)):
+                    st.session_state["kb_m_prev_idx"] = min(len(sel_ids) - 1, idx + 1)
+                    st.rerun()
+
+            current_id = sel_ids[idx]
+            row = fetch_chunk_by_id(engine, int(current_id))
+            if row:
+                _rid, path, cname, content = row
+                st.caption(f"{path} :: {cname}")
+                st.text_area("Content", content, height=360)
+
+        del_count = len(st.session_state["kb_m_selected"])
+        with st.form("kb_delete_form", clear_on_submit=False):
+            btn_del = st.form_submit_button(f"Delete selected ({del_count})", disabled=(del_count == 0))
+        if btn_del:
+            try:
+                n = delete_chunks_by_ids(engine, list(st.session_state["kb_m_selected"]))
+                st.success(f"Deleted {n} item(s)")
+                st.session_state["kb_m_selected"] = []
+                st.session_state.pop("kb_m_prev_idx", None)
+                # Invalidate search cache
+                st.session_state.pop("kb_searcher", None)
+                st.session_state.pop("kb_searcher_docs_len", None)
+                st.rerun()
             except Exception as e:
-                st.error(f"Reset failed: {e}")
+                st.error(f"Delete failed: {e}")
+
+    with tab_sys:
+        st.subheader("Danger zone")
+        st.caption("Factory reset DB: wipes jobs and KB tables. This cannot be undone.")
+        with st.form("factory_reset_form", clear_on_submit=False):
+            confirm = st.text_input("Type RESET to confirm", key="factory_reset_confirm")
+            do_reset = st.form_submit_button("Factory reset DB")
+        if do_reset:
+            if (st.session_state.get("factory_reset_confirm", "").strip().upper() != "RESET"):
+                st.error("Please type RESET to confirm.")
+            else:
+                try:
+                    from kb.db import factory_reset_db
+                    factory_reset_db()
+                    st.success("Database reset complete")
+                except Exception as e:
+                    st.error(f"Reset failed: {e}")

@@ -1,10 +1,24 @@
-markitdown[all]==0.1.3
+# Core dependencies
 repomix==0.3.4
 streamlit==1.50.0
 tiktoken==0.11.0
-scikit-learn
-pynndescent
+
+# Database
+SQLAlchemy==2.0.35
+psycopg[binary,pool]==3.2.1
+
+# ML / Search
+scikit-learn==1.5.2
+pynndescent==0.5.13
 numpy
-sqlalchemy
-streamlit-agraph
-thefuzz[speedup]
+scipy
+
+# Scheduling
+APScheduler==3.10.4
+
+# Visualization
+pyvis==0.3.2
+
+# Document conversion
+markitdown[all]==0.1.3
+pdfminer.six==20250506

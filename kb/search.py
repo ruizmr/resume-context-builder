@@ -9,7 +9,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import linear_kernel
 from sklearn.decomposition import TruncatedSVD
-from kb.db import get_engine, persist_chunk_vectors, fetch_all_chunks, fetch_chunk_vectors
+from kb.db import get_engine, persist_chunk_vectors, fetch_all_chunks, fetch_chunk_vectors, fetch_feedback_for_query
 
 try:
     from pynndescent import NNDescent  # type: ignore
@@ -346,6 +346,29 @@ class HybridSearcher:
 			final_scores = final_scores + (w_lsa * lsa_norm)
 		if ann_norm is not None:
 			final_scores = final_scores + (w_ann * ann_norm)
+
+		# Bandit/RL: Incorporate explicit user feedback (Rocchio-style adjustment)
+		# We use explicit feedback (thumbs up/down) to adjust scores.
+		# Avoid implicit penalties for re-searching to prevent "negative score" loop.
+		try:
+			feedback = fetch_feedback_for_query(query)
+			if feedback:
+				# Map chunk_id -> aggregate score
+				# sum(scores) so multiple thumbs up boost more, mixed cancel out
+				f_map = {}
+				for cid, sc in feedback:
+					f_map[cid] = f_map.get(cid, 0.0) + sc
+				
+				# Apply boost/penalty
+				# We add (0.2 * aggregate_feedback) to the normalized score
+				# This allows user preference to bubble up items
+				for i, cid in enumerate(self.ids):
+					if cid in f_map:
+						boost = f_map[cid] * 0.2
+						final_scores[i] = np.clip(final_scores[i] + boost, 0.0, 1.0 + abs(boost))
+		except Exception:
+			pass
+
 		# If scores are uniformly low, short-circuit using effective min score
 		try:
 			if final_scores is None or final_scores.size == 0 or float(np.max(final_scores)) < float(ms):
