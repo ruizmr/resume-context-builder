@@ -24,8 +24,34 @@ from kb.artifacts import load_artifacts
 from kb.db import fetch_meta_nodes_for_chunks
 
 try:
-    from streamlit_agraph import agraph, Node, Edge, Config
-except ImportError:
+    import streamlit_agraph
+    # Attempt to get the raw component function
+    if hasattr(streamlit_agraph, "_agraph"):
+        _raw_agraph_component = streamlit_agraph._agraph
+    else:
+        # Re-declare it if we can't find it (fallback hack)
+        import os
+        import streamlit.components.v1 as components
+        parent_dir = os.path.dirname(os.path.abspath(streamlit_agraph.__file__))
+        build_dir = os.path.join(parent_dir, "frontend/build")
+        _raw_agraph_component = components.declare_component("agraph", path=build_dir)
+
+    from streamlit_agraph import Node, Edge, Config
+    
+    # Redefine agraph wrapper to support key explicitly
+    def agraph(nodes, edges, config, **kwargs):
+        # Standard serialization logic from the original library
+        node_ids = [node.id for node in nodes]
+        if len(node_ids) > len(set(node_ids)):
+            st.warning("Duplicated node IDs exist.")
+        nodes_data = [node.to_dict() for node in nodes]
+        edges_data = [edge.to_dict() for edge in edges]
+        config_json = json.dumps(config.__dict__)
+        data_dict = {"nodes": nodes_data, "edges": edges_data}
+        data_json = json.dumps(data_dict)
+        return _raw_agraph_component(data=data_json, config=config_json, **kwargs)
+
+except Exception:
     agraph = None
 
 def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | None = None):
@@ -148,8 +174,14 @@ def _friendly_title(path: str, chunk_name: str, content: str = "") -> str:
     cleaned = " ".join(part for part in cleaned.split() if not part.isupper() or len(part) <= 5)
     return cleaned.strip() or chunk_name or name
 
+import importlib.metadata
+try:
+    __version__ = importlib.metadata.version("context-packager")
+except Exception:
+    __version__ = "0.0.0"
+
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
-st.title("Context Packager v0.2.16")
+st.title(f"Context Packager v{__version__}")
 
 # Defaults designed to be portable on any machine
 default_pdf_dir = ""
@@ -720,27 +752,44 @@ with home_tab:
                             st.markdown(f"**{path}**\n\n{snippet}\n\n---\n\n{full_text}")
                             
                     with cols[2]:
-                         # Feedback buttons (small vertical stack or horizontal)
+                         # Feedback buttons
                          # Use current query from state
                          curr_q = st.session_state.get("q_top", "")
-                         if st.button("👍", key=f"fb_up_{cid}{key_suffix}", help="More like this", use_container_width=True):
-                              record_feedback(curr_q, cid, 1.0)
-                              if auto_tune:
-                                  try:
-                                      opt = get_optimizer()
-                                      opt.update(params, 1.0) 
-                                  except Exception:
-                                      pass
-                              st.toast("Recorded: More like this")
-                         if st.button("👎", key=f"fb_dn_{cid}{key_suffix}", help="Less like this", use_container_width=True):
-                              record_feedback(curr_q, cid, -1.0)
-                              if auto_tune:
-                                  try:
-                                      opt = get_optimizer()
-                                      opt.update(params, -1.0)
-                                  except Exception:
-                                      pass
-                              st.toast("Recorded: Less like this")
+                         # Use streamlit's feedback widget if available (v1.37+), or fallback
+                         try:
+                             fb_key = f"fb_{cid}{key_suffix}"
+                             # This widget returns 0 (thumbs down) or 1 (thumbs up) or None
+                             sentiment = st.feedback("thumbs", key=fb_key)
+                             if sentiment is not None:
+                                  score = 1.0 if sentiment == 1 else -1.0
+                                  record_feedback(curr_q, cid, score)
+                                  if auto_tune:
+                                      try:
+                                          opt = get_optimizer()
+                                          opt.update(params, score) 
+                                      except Exception:
+                                          pass
+                                  # st.toast not needed as widget state persists visual feedback
+                         except AttributeError:
+                             # Fallback for older streamlit
+                             if st.button("👍", key=f"fb_up_{cid}{key_suffix}", help="More like this", use_container_width=True):
+                                  record_feedback(curr_q, cid, 1.0)
+                                  if auto_tune:
+                                      try:
+                                          opt = get_optimizer()
+                                          opt.update(params, 1.0) 
+                                      except Exception:
+                                          pass
+                                  st.toast("Recorded: More like this")
+                             if st.button("👎", key=f"fb_dn_{cid}{key_suffix}", help="Less like this", use_container_width=True):
+                                  record_feedback(curr_q, cid, -1.0)
+                                  if auto_tune:
+                                      try:
+                                          opt = get_optimizer()
+                                          opt.update(params, -1.0)
+                                      except Exception:
+                                          pass
+                                  st.toast("Recorded: Less like this")
 
             # Contextual Ambiguity: Auto-Clustering
             # We calculate clusters to color the graph, but do not filter by them in the list.
