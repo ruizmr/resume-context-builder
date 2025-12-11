@@ -20,6 +20,7 @@ dependencies = [
   "psycopg[binary,pool]==3.2.1",
   "pynndescent==0.5.13",
   "APScheduler==3.10.4",
+  "pyvis==0.3.2",
 ]
 
 [project.urls]

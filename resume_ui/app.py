@@ -4,6 +4,7 @@ import base64
 import zipfile
 import shutil
 import json
+import tempfile
 import uuid
 from pathlib import Path
 import importlib.resources as resources
@@ -22,13 +23,13 @@ from kb.artifacts import load_artifacts
 from kb.db import fetch_meta_nodes_for_chunks
 
 try:
-    from streamlit_agraph import agraph, Node, Edge, Config
+    from pyvis.network import Network
 except ImportError:
-    agraph = None
+    Network = None
 
 def render_interactive_graph(searcher, cids: list[int]):
-    if not agraph:
-        st.warning("streamlit-agraph not installed")
+    if not Network:
+        st.warning("pyvis not installed")
         return None
 
     # Map cid -> internal idx
@@ -37,12 +38,10 @@ def render_interactive_graph(searcher, cids: list[int]):
     # Fetch Meta Info
     meta_map = fetch_meta_nodes_for_chunks(get_engine(), cids)
     
-    nodes = []
-    edges = []
-    added_nodes = set()
+    net = Network(height="500px", width="100%", bgcolor="#ffffff", font_color="black")
+    net.force_atlas_2based()
     
-    # Track meta -> doc links for reverse lookup
-    # But for graph, we just need nodes/edges
+    added_nodes = set()
     
     for cid in cids:
         if cid not in added_nodes:
@@ -55,8 +54,8 @@ def render_interactive_graph(searcher, cids: list[int]):
                 title = f"{path}\n{name}"
             
             # Use smaller nodes for docs
-            nodes.append(Node(id=f"doc_{cid}", label=label, title=title, size=15, color="#4b8fea", shape="box"))
-            added_nodes.add(cid)
+            net.add_node(f"doc_{cid}", label=label, title=title, size=15, color="#4b8fea", shape="box")
+            added_nodes.add(f"doc_{cid}")
             
             # Add Meta Nodes
             metas = meta_map.get(cid, [])
@@ -64,24 +63,32 @@ def render_interactive_graph(searcher, cids: list[int]):
                 m_id = f"meta_{m_type}_{m_name}"
                 if m_id not in added_nodes:
                     color = "#ff6b6b" if m_type == "topic" else ("#51cf66" if m_type == "entity" else "#fcc419")
-                    # Larger nodes for topics
-                    nodes.append(Node(id=m_id, label=m_name, title=f"{m_type}: {m_name}", size=25, color=color, shape="ellipse"))
+                    net.add_node(m_id, label=m_name, title=f"{m_type}: {m_name}", size=25, color=color, shape="ellipse")
                     added_nodes.add(m_id)
                 
                 # Edge Doc -> Meta
-                edges.append(Edge(source=f"doc_{cid}", target=m_id, color="#e0e0e0"))
+                net.add_edge(f"doc_{cid}", m_id, color="#e0e0e0")
 
-    config = Config(
-        width="100%",
-        height=500,
-        directed=False, 
-        physics=True, 
-        hierarchical=False,
-        node={'labelProperty': 'label', 'renderLabel': True}
-    )
-    
-    # Returns the ID of the clicked node (e.g., "doc_123" or "meta_topic_Financials")
-    return agraph(nodes=nodes, edges=edges, config=config)
+    # Generate graph html
+    try:
+        # Save to temp file and read back or use tempfile
+        # pyvis write_html writes a full page.
+        # We can also get the html string directly if we use generate_html() but it needs a name.
+        tmp_name = f"graph_{uuid.uuid4().hex}.html"
+        path = Path(tempfile.gettempdir()) / tmp_name
+        net.save_graph(str(path))
+        html_content = path.read_text(encoding="utf-8")
+        # Cleanup
+        try:
+            path.unlink()
+        except Exception:
+            pass
+        
+        components.html(html_content, height=520)
+        return None # Pyvis in streamlit doesn't easily return clicked events without custom component
+    except Exception as e:
+        st.error(f"Graph generation error: {e}")
+        return None
 
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
 st.title("Context Packager")
@@ -550,31 +557,43 @@ with home_tab:
                     clusters = searcher.cluster_search_results(cids, n_clusters=5)
                     
                     if len(clusters) > 1:
-                        st.caption("Auto-detected Contexts:")
-                        # Create tabs for clusters
-                        tab_labels = ["All"] + [f"{c['label']} ({c['count']})" for c in clusters]
-                        tabs = st.tabs(tab_labels)
+                        st.subheader("Context Clusters")
+                        st.caption("Results grouped by semantic similarity. Click a cluster to filter.")
                         
-                        # "All" tab
-                        with tabs[0]:
-                            filtered_results = results_list
+                        # Use columns or pills to select cluster
+                        # We use session state to track active filter
+                        if "cluster_filter" not in st.session_state:
+                            st.session_state["cluster_filter"] = "All"
+                            
+                        cols = st.columns(len(clusters) + 1)
+                        if cols[0].button("All", type="primary" if st.session_state["cluster_filter"] == "All" else "secondary", use_container_width=True):
+                            st.session_state["cluster_filter"] = "All"
+                            st.rerun()
+                            
+                        for i, c in enumerate(clusters):
+                            label = c["label"]
+                            count = c["count"]
+                            idx = i + 1
+                            if idx < len(cols):
+                                if cols[idx].button(f"{label} ({count})", type="primary" if st.session_state["cluster_filter"] == str(i) else "secondary", use_container_width=True):
+                                    st.session_state["cluster_filter"] = str(i)
+                                    st.rerun()
                         
-                        # Cluster tabs
-                        for i, cluster in enumerate(clusters):
-                            with tabs[i+1]:
-                                cluster_cids = set(cluster["cids"])
-                                filtered_results = [r for r in results_list if r[0] in cluster_cids]
-                                
-                                # If inside a specific cluster tab, we want to only show those results
-                                # Since Streamlit executes the whole script top-down, we need to capture 
-                                # the filtered list for the rendering block below.
-                                # However, st.tabs content is executed immediately. 
-                                # So we need to restructure the rendering loop to happen *inside* or 
-                                # be aware of the active selection. 
-                                # Limitation: st.tabs doesn't return state easily without session state.
-                                # Workaround: We'll render the list inside each tab, or use a radio button/pills for selection.
-                                # Tabs are cleaner but require duplicating the render call or wrapping it.
-                                # Let's use the Render Logic function approach.
+                        # Apply filter
+                        if st.session_state["cluster_filter"] != "All":
+                            try:
+                                c_idx = int(st.session_state["cluster_filter"])
+                                if 0 <= c_idx < len(clusters):
+                                    cluster_cids = set(clusters[c_idx]["cids"])
+                                    filtered_results = [r for r in results_list if r[0] in cluster_cids]
+                                    render_results(filtered_results, key_suffix=f"_c{c_idx}")
+                                    # Skip default rendering
+                                    results_list = [] 
+                            except ValueError:
+                                pass
+                        else:
+                             render_results(results_list, key_suffix="_all")
+                             results_list = [] # Handled
                 except Exception as e:
                     # Fallback to normal list
                     pass
@@ -658,53 +677,13 @@ with home_tab:
                     pass
 
             # Graph Visualization (Interactive)
-            if results_list:
-                with st.expander("Visualize Meta-Graph (Interactive)", expanded=False):
+            # Pyvis is interactive but doesn't return selection easily in Streamlit without component
+            if filtered_results or results_list:
+                 with st.expander("Visualize Meta-Graph (Interactive)", expanded=False):
                     try:
                         searcher = st.session_state["kb_searcher"]
-                        # Use same list as clusters if filtered, else all
-                        viz_cids = [r[0] for r in (filtered_results or results_list)[:20]]
-                        clicked_node_id = render_interactive_graph(searcher, viz_cids)
-                        
-                        if clicked_node_id:
-                            # Refine Scope Logic
-                            st.info(f"Refining scope to: {clicked_node_id}")
-                            
-                            # If meta node clicked, find all docs linked to it
-                            if clicked_node_id.startswith("meta_"):
-                                # Parse type/name from id "meta_{type}_{name}"
-                                # But simpler: searcher doesn't have reverse index easily available without DB.
-                                # Use DB query.
-                                parts = clicked_node_id.split("_", 2)
-                                if len(parts) >= 3:
-                                    m_type, m_name = parts[1], parts[2]
-                                    # We need a reverse lookup function in db.py or just filter displayed results locally?
-                                    # Filtering displayed results locally is safer if we assume they are in the viz set.
-                                    # But better to fetch from DB for completeness.
-                                    # For now, let's just filter the *current* results list for those connected to this meta node.
-                                    
-                                    # Re-fetch meta map for all current results
-                                    meta_map = fetch_meta_nodes_for_chunks(get_engine(), [r[0] for r in results_list])
-                                    
-                                    subset = []
-                                    for r in results_list:
-                                        metas = meta_map.get(r[0], [])
-                                        # Check if this doc has the clicked meta node
-                                        if any(m[0] == m_type and m[1] == m_name for m in metas):
-                                            subset.append(r)
-                                    
-                                    if subset:
-                                        st.success(f"Found {len(subset)} documents for {m_name}")
-                                        render_results(subset, key_suffix=f"_graph_{clicked_node_id}")
-                                        # Stop processing further to show this filtered view at bottom
-                                    else:
-                                        st.warning("No documents in current search results match this node.")
-                            
-                            elif clicked_node_id.startswith("doc_"):
-                                cid = int(clicked_node_id.replace("doc_", ""))
-                                subset = [r for r in results_list if r[0] == cid]
-                                render_results(subset, key_suffix=f"_graph_{cid}")
-
+                        viz_cids = [r[0] for r in (filtered_results or results_list)[:30]] # Limit to 30 nodes
+                        render_interactive_graph(searcher, viz_cids)
                     except Exception as e:
                         st.error(f"Graph error: {e}")
 
