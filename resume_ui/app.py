@@ -408,25 +408,25 @@ with st.sidebar:
         kb_min_score = 0.005
         kb_neighbors = 0
     else:
-        kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
-        kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
-        kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
+    kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
+    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
+    kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
         
     kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
     
     if not auto_tune:
-        # Advanced retrieval tuning
-        kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
-        kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
-        kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
-        kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
-        kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
-        kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
-        mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
-        mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
-        phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
-        enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
-        rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
+    # Advanced retrieval tuning
+    kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
+    kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
+    kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
+    kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
+    kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
+    kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
+    mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
+    mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
+    phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
+    enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
+    rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
 
     st.divider()
     
@@ -827,6 +827,7 @@ with home_tab:
                         searcher = st.session_state["kb_searcher"]
                         
                         # Graph Exploration State
+                        # Graph Exploration State
                         # We use session state to track if we are "focused" on a node to explore its neighbors
                         if "graph_focus_node" not in st.session_state:
                             st.session_state["graph_focus_node"] = None
@@ -843,38 +844,24 @@ with home_tab:
                                 st.session_state["graph_focus_node"] = None
                                 st.rerun()
                             
-                            # If we are focused, we ideally show the node and its immediate neighbors.
-                            # Since fetching neighbors requires DB calls not exposed via searcher directly, 
-                            # and we want to keep it simple, we might limit scope. 
-                            # However, to satisfy "explore", we can try to find relevant chunks.
-                            
                             if focus_node.isdigit():
                                 # Focused on a Doc
                                 viz_cids = [int(focus_node)]
-                                # TODO: fetch connected chunks via shared meta nodes? 
-                                # For now, let's just stick to the original results logic but maybe highlight?
-                                # Actually, without a "get_neighbors" DB function, we are limited.
-                                # Let's fallback to showing the search results but centering graph config?
-                                # Agraph doesn't support dynamic centering easily without re-render.
-                                # Let's just use the result list for now as the "base" graph.
+                                # Fallback to showing the search results
                                 viz_cids = [r[0] for r in results_list[:40]]
                             elif focus_node.startswith("meta_"):
                                 # Focused on a Keyword -> Show all chunks connected to it
-                                # We need a DB query for this.
-                                from kb.db import fetch_chunks_by_meta_node
                                 try:
                                     parts = focus_node.split("_", 2)
-                                    if len(parts) >= 3:
-                                        m_type, m_name = parts[1], parts[2]
-                                        # Function to be implemented in db.py or ad-hoc query
-                                        # Let's assume we can implement it or do a rough query
-                                        # For now, let's filter current search results to those connected
+                                if len(parts) >= 3:
+                                    m_type, m_name = parts[1], parts[2]
+                                        # Filter current search results to those connected
                                         viz_cids = [r[0] for r in results_list if m_name.lower() in r[5].lower()]
                                         if not viz_cids:
                                              viz_cids = [r[0] for r in results_list[:40]]
                                 except Exception:
                                     viz_cids = [r[0] for r in results_list[:40]]
-                                    else:
+                        else:
                             viz_cids = [r[0] for r in results_list[:40]]
 
                         selection = render_interactive_graph(searcher, viz_cids, clusters=clusters)
@@ -899,12 +886,16 @@ with home_tab:
                                         st.rerun()
 
                                     # Find docs connected to this meta node in the current results
-                                    # We can iterate results_list and check if text contains m_name
-                                    # (Simplification: robust way would be querying edges, but we have text handy)
                                     count = 0
                 for cid, score, path, cname, snippet, full_text in results_list:
                                         if m_name.lower() in full_text.lower():
-                                            with st.expander(f"{path} :: {cname}", expanded=(count==0)):
+                                            clean_name = Path(path).name
+                                            if clean_name.lower().endswith(".md"):
+                                                clean_name = clean_name[:-3]
+                                            header = f"{clean_name} :: {cname}"
+                                            
+                                            with st.expander(header, expanded=(count==0)):
+                                                st.caption(f"Source: {path}")
                                                 # Highlight the term
                                                 highlit = full_text.replace(m_name, f"**{m_name}**").replace(m_name.title(), f"**{m_name.title()}**")
                                                 # Show a snippet around the term (PREVIEW)
@@ -921,6 +912,7 @@ with home_tab:
                                                 
                                             count += 1
                                             if count >= 10: break # Show more for context
+
                             elif selection.isdigit():
                                 # Show Doc details
                                 cid = int(selection)
