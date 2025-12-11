@@ -17,8 +17,9 @@ import streamlit.components.v1 as components
 from hr_tools.pdf_to_md import convert_pdfs_to_markdown
 from hr_tools.package_context import package_markdown_directory
 from kb.upsert import upsert_markdown_files
-from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id, STATE_DIR, get_database_url
+from kb.db import get_engine, fetch_all_chunks, count_chunks, fetch_chunks, delete_chunks_by_ids, fetch_chunk_by_id, STATE_DIR, get_database_url, record_feedback, record_search_history
 from kb.search import HybridSearcher
+from kb.tuning import get_optimizer
 from kb.artifacts import load_artifacts
 from kb.db import fetch_meta_nodes_for_chunks
 
@@ -27,7 +28,7 @@ try:
 except ImportError:
     Network = None
 
-def render_interactive_graph(searcher, cids: list[int]):
+def render_interactive_graph(searcher, cids: list[int], clusters: list[dict] | None = None):
     if not Network:
         st.warning("pyvis not installed")
         return None
@@ -35,26 +36,47 @@ def render_interactive_graph(searcher, cids: list[int]):
     # Map cid -> internal idx
     cid_to_idx = {c: i for i, c in enumerate(searcher.ids)}
     
+    # Map cid -> cluster label/color
+    cid_to_cluster = {}
+    if clusters:
+        for i, c in enumerate(clusters):
+            label = c["label"]
+            for cid in c["cids"]:
+                cid_to_cluster[cid] = (label, i)
+
     # Fetch Meta Info
     meta_map = fetch_meta_nodes_for_chunks(get_engine(), cids)
     
-    net = Network(height="500px", width="100%", bgcolor="#ffffff", font_color="black")
+    net = Network(height="500px", width="100%", bgcolor="#ffffff", font_color="black", cdn_resources="remote")
     net.force_atlas_2based()
     
     added_nodes = set()
     
+    # Define a color palette for clusters
+    cluster_colors = ["#4b8fea", "#ff6b6b", "#51cf66", "#fcc419", "#ff922b", "#845ef7", "#e64980", "#20c997"]
+
     for cid in cids:
         if cid not in added_nodes:
             idx = cid_to_idx.get(cid)
             label = f"Doc {cid}"
             title = "Unknown"
+            
+            # Determine color and group from cluster
+            color = "#4b8fea" # Default blue
+            group = "default"
+            if cid in cid_to_cluster:
+                c_label, c_idx = cid_to_cluster[cid]
+                color = cluster_colors[c_idx % len(cluster_colors)]
+                group = c_label
+                title = f"Cluster: {c_label}\n"
+
             if idx is not None:
                 path, name = searcher.meta[idx]
                 label = name
-                title = f"{path}\n{name}"
+                title += f"{path}\n{name}"
             
             # Use smaller nodes for docs
-            net.add_node(f"doc_{cid}", label=label, title=title, size=15, color="#4b8fea", shape="box")
+            net.add_node(f"doc_{cid}", label=label, title=title, size=15, color=color, shape="box", group=group)
             added_nodes.add(f"doc_{cid}")
             
             # Add Meta Nodes
@@ -62,8 +84,8 @@ def render_interactive_graph(searcher, cids: list[int]):
             for m_type, m_name in metas:
                 m_id = f"meta_{m_type}_{m_name}"
                 if m_id not in added_nodes:
-                    color = "#ff6b6b" if m_type == "topic" else ("#51cf66" if m_type == "entity" else "#fcc419")
-                    net.add_node(m_id, label=m_name, title=f"{m_type}: {m_name}", size=25, color=color, shape="ellipse")
+                    m_color = "#e9ecef" # Neutral for meta nodes
+                    net.add_node(m_id, label=m_name, title=f"{m_type}: {m_name}", size=10, color=m_color, shape="ellipse")
                     added_nodes.add(m_id)
                 
                 # Edge Doc -> Meta
@@ -71,9 +93,6 @@ def render_interactive_graph(searcher, cids: list[int]):
 
     # Generate graph html
     try:
-        # Save to temp file and read back or use tempfile
-        # pyvis write_html writes a full page.
-        # We can also get the html string directly if we use generate_html() but it needs a name.
         tmp_name = f"graph_{uuid.uuid4().hex}.html"
         path = Path(tempfile.gettempdir()) / tmp_name
         net.save_graph(str(path))
@@ -84,11 +103,9 @@ def render_interactive_graph(searcher, cids: list[int]):
         except Exception:
             pass
         
-        components.html(html_content, height=520)
-        return None # Pyvis in streamlit doesn't easily return clicked events without custom component
+        components.html(html_content, height=520, scrolling=True)
     except Exception as e:
         st.error(f"Graph generation error: {e}")
-        return None
 
 st.set_page_config(page_title="Context Packager", layout="wide", initial_sidebar_state="collapsed")
 st.title("Context Packager")
@@ -303,22 +320,35 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed to save settings: {e}")
     st.caption("KB search configuration")
-    kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
-    kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
-    kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
+    auto_tune = st.toggle("Auto-Tune (MCTS-RL)", value=True, help="Automatically adjust parameters based on user feedback using a tree search optimizer.")
+    
+    if auto_tune:
+        st.caption("Auto-Tune Active. Manual overrides disabled.")
+        # We still define variables for scope but don't show widgets or disable them
+        # Just use placeholders or last knowns, the actual search logic will use optimizer
+        kb_top_k = 5
+        kb_min_score = 0.005
+        kb_neighbors = 0
+    else:
+        kb_top_k = st.number_input("Max results", min_value=1, max_value=50, step=1, key="kb_top_k")
+        kb_min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, step=0.005, key="kb_min_score")
+        kb_neighbors = st.number_input("Neighbors to include (per match)", min_value=0, max_value=10, step=1, key="kb_neighbors")
+        
     kb_sequence = st.checkbox("Preserve document sequence (group by file, in order)", key="kb_sequence")
-    # Advanced retrieval tuning
-    kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
-    kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
-    kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
-    kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
-    kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
-    kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
-    mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
-    mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
-    phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
-    enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
-    rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
+    
+    if not auto_tune:
+        # Advanced retrieval tuning
+        kb_use_ann = st.checkbox("Use ANN (NN-Descent) for candidates", key="kb_use_ann")
+        kb_cand_mult = st.number_input("Candidate multiplier", min_value=1, max_value=20, step=1, key="kb_cand_mult")
+        kb_bm25_weight = st.slider("BM25 weight (0=TF-IDF, 1=BM25)", min_value=0.0, max_value=1.0, step=0.05, key="kb_bm25_weight")
+        kb_lsa_weight = st.slider("LSA weight (SVD cosine)", min_value=0.0, max_value=1.0, step=0.05, key="kb_lsa_weight")
+        kb_tfidf_metric = st.selectbox("TF-IDF similarity metric", options=["cosine", "l2"], key="kb_tfidf_metric")
+        kb_ann_weight = st.slider("ANN (NN-Descent) weight", min_value=0.0, max_value=1.0, step=0.05, key="kb_ann_weight")
+        mmr_div = st.checkbox("Diversify results (MMR)", key="kb_mmr_diversify")
+        mmr_lambda = st.slider("MMR lambda (relevance vs diversity)", min_value=0.0, max_value=1.0, step=0.05, key="kb_mmr_lambda")
+        phrase_boost = st.slider("Quoted phrase boost", min_value=0.0, max_value=0.5, step=0.05, key="kb_phrase_boost")
+        enable_rare = st.checkbox("Filter candidates by rare terms", key="kb_enable_rare_filter")
+        rare_idf_th = st.number_input("Rare term IDF threshold", min_value=0.0, max_value=20.0, step=0.5, key="kb_rare_idf_threshold")
 
     st.divider()
     st.caption("Instructions (optional)")
@@ -483,24 +513,52 @@ with home_tab:
                 # Effective threshold with base floor (prevents persisted 0.0 from leaking)
                 _saved_ms = float(st.session_state.get("kb_min_score", 0.005))
                 min_score = max(0.005, _saved_ms)
+                
+                # Parameters: either from Auto-Tune (Optimizer) or Manual
+                params = {}
+                if auto_tune:
+                    opt = get_optimizer()
+                    params = opt.suggest_parameters()
+                    # Show active params
+                    with st.expander("Auto-Tune Active Parameters", expanded=False):
+                        st.json(params)
+                else:
+                    params = {
+                        "kb_top_k": top_k,
+                        "kb_min_score": min_score,
+                        "kb_neighbors": int(st.session_state.get("kb_neighbors", 0)),
+                        "kb_bm25_weight": float(st.session_state.get("kb_bm25_weight", 0.6)),
+                        "kb_cand_mult": int(st.session_state.get("kb_cand_mult", 3)),
+                        "kb_lsa_weight": float(st.session_state.get("kb_lsa_weight", 0.2)),
+                        "kb_ann_weight": float(st.session_state.get("kb_ann_weight", 0.0)),
+                        "kb_mmr_diversify": bool(st.session_state.get("kb_mmr_diversify", True)),
+                        "kb_mmr_lambda": float(st.session_state.get("kb_mmr_lambda", 0.2)),
+                        "kb_phrase_boost": float(st.session_state.get("kb_phrase_boost", 0.1)),
+                        "kb_enable_rare_filter": bool(st.session_state.get("kb_enable_rare_filter", True)),
+                        "kb_rare_idf_threshold": float(st.session_state.get("kb_rare_idf_threshold", 3.0)),
+                    }
+
                 results = searcher.search(
                     st.session_state["q_top"],
-                    top_k=top_k,
-                    neighbors=int(st.session_state.get("kb_neighbors", 0)),
+                    top_k=params.get("kb_top_k", 5),
+                    neighbors=params.get("kb_neighbors", 0),
                     sequence=bool(st.session_state.get("kb_sequence", True)),
                     use_ann=bool(st.session_state.get("kb_use_ann", True)),
-                    bm25_weight=float(st.session_state.get("kb_bm25_weight", 0.6)),
-                    cand_multiplier=int(st.session_state.get("kb_cand_mult", 3)),
-                    lsa_weight=float(st.session_state.get("kb_lsa_weight", 0.2)),
+                    bm25_weight=params.get("kb_bm25_weight", 0.45),
+                    cand_multiplier=params.get("kb_cand_mult", 5),
+                    lsa_weight=params.get("kb_lsa_weight", 0.2),
                     tfidf_metric=str(st.session_state.get("kb_tfidf_metric", "cosine")),
-                    ann_weight=float(st.session_state.get("kb_ann_weight", 0.0)),
-                    min_score=float(min_score),
-                    mmr_diversify=bool(st.session_state.get("kb_mmr_diversify", True)),
-                    mmr_lambda=float(st.session_state.get("kb_mmr_lambda", 0.2)),
-                    phrase_boost=float(st.session_state.get("kb_phrase_boost", 0.1)),
-                    enable_rare_term_filter=bool(st.session_state.get("kb_enable_rare_filter", True)),
-                    rare_idf_threshold=float(st.session_state.get("kb_rare_idf_threshold", 3.0)),
+                    ann_weight=params.get("kb_ann_weight", 0.15),
+                    min_score=params.get("kb_min_score", 0.005),
+                    mmr_diversify=params.get("kb_mmr_diversify", True),
+                    mmr_lambda=params.get("kb_mmr_lambda", 0.2),
+                    phrase_boost=params.get("kb_phrase_boost", 0.1),
+                    enable_rare_term_filter=params.get("kb_enable_rare_filter", True),
+                    rare_idf_threshold=params.get("kb_rare_idf_threshold", 3.0),
                 )
+                
+                # Log search history for optimization loop
+                record_search_history(st.session_state["q_top"], params, len(results))
                 # filter by minimum score (defensive)
                 results = [r for r in results if r[1] >= min_score]
                 # Treat as empty if best remaining score is below threshold
@@ -548,56 +606,6 @@ with home_tab:
             # Collapsible, scrollable panels per result with selection checkboxes
             results_list = st.session_state.get("kb_results_list") or []
             
-            # Contextual Ambiguity: Auto-Clustering
-            filtered_results = results_list
-            if results_list and "kb_searcher" in st.session_state:
-                try:
-                    searcher = st.session_state["kb_searcher"]
-                    cids = [r[0] for r in results_list]
-                    clusters = searcher.cluster_search_results(cids, n_clusters=5)
-                    
-                    if len(clusters) > 1:
-                        st.subheader("Context Clusters")
-                        st.caption("Results grouped by semantic similarity. Click a cluster to filter.")
-                        
-                        # Use columns or pills to select cluster
-                        # We use session state to track active filter
-                        if "cluster_filter" not in st.session_state:
-                            st.session_state["cluster_filter"] = "All"
-                            
-                        cols = st.columns(len(clusters) + 1)
-                        if cols[0].button("All", type="primary" if st.session_state["cluster_filter"] == "All" else "secondary", use_container_width=True):
-                            st.session_state["cluster_filter"] = "All"
-                            st.rerun()
-                            
-                        for i, c in enumerate(clusters):
-                            label = c["label"]
-                            count = c["count"]
-                            idx = i + 1
-                            if idx < len(cols):
-                                if cols[idx].button(f"{label} ({count})", type="primary" if st.session_state["cluster_filter"] == str(i) else "secondary", use_container_width=True):
-                                    st.session_state["cluster_filter"] = str(i)
-                                    st.rerun()
-                        
-                        # Apply filter
-                        if st.session_state["cluster_filter"] != "All":
-                            try:
-                                c_idx = int(st.session_state["cluster_filter"])
-                                if 0 <= c_idx < len(clusters):
-                                    cluster_cids = set(clusters[c_idx]["cids"])
-                                    filtered_results = [r for r in results_list if r[0] in cluster_cids]
-                                    render_results(filtered_results, key_suffix=f"_c{c_idx}")
-                                    # Skip default rendering
-                                    results_list = [] 
-                            except ValueError:
-                                pass
-                        else:
-                             render_results(results_list, key_suffix="_all")
-                             results_list = [] # Handled
-                except Exception as e:
-                    # Fallback to normal list
-                    pass
-
             # Define renderer to reuse
             def render_results(results_subset, key_suffix=""):
                 selected_map = st.session_state.get("kb_results_selected") or {}
@@ -636,116 +644,67 @@ with home_tab:
                 
                 # List
                 for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_subset):
-                    cols = st.columns([1, 24])
+                    cols = st.columns([1, 2, 21])
                     with cols[0]:
                         # Update global map on change
                         def update_sel(c=cid, k=f"kb_sel_{cid}{key_suffix}"):
                             selected_map[c] = st.session_state[k]
                             st.session_state["kb_results_selected"] = selected_map
                         
-                        st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}{key_suffix}", on_change=update_sel)
+                        st.checkbox("Select", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}{key_suffix}", on_change=update_sel, label_visibility="collapsed")
                     with cols[1]:
+                         # Feedback buttons (small)
+                         subc = st.columns(2)
+                         # Use current query from state
+                         curr_q = st.session_state.get("q_top", "")
+                         if subc[0].button("👍", key=f"fb_up_{cid}{key_suffix}", help="More like this"):
+                              record_feedback(curr_q, cid, 1.0)
+                              # Update optimizer if auto-tune is active (or just always update if we can map it)
+                              if auto_tune:
+                                  try:
+                                      opt = get_optimizer()
+                                      # We use the LAST used params for this query if possible, or current recommendation
+                                      # Ideally we'd link feedback to specific search_history ID, but loose coupling works for MCTS aggregation
+                                      opt.update(params, 1.0) 
+                                  except Exception:
+                                      pass
+                              st.toast("Recorded: More like this")
+                         if subc[1].button("👎", key=f"fb_dn_{cid}{key_suffix}", help="Less like this"):
+                              record_feedback(curr_q, cid, -1.0)
+                              if auto_tune:
+                                  try:
+                                      opt = get_optimizer()
+                                      opt.update(params, -1.0)
+                                  except Exception:
+                                      pass
+                              st.toast("Recorded: Less like this")
+                    with cols[2]:
                         header = f"{path} :: {cname} — score {score:.3f}"
                         with st.expander(header, expanded=(i == 0)):
                             st.markdown(f"**{path}**\n\n{snippet}\n\n---\n\n{full_text}")
 
-            # If we have clusters, use tabs
+            # Contextual Ambiguity: Auto-Clustering
+            # We calculate clusters to color the graph, but do not filter by them in the list.
+            clusters = []
             if results_list and "kb_searcher" in st.session_state:
                 try:
                     searcher = st.session_state["kb_searcher"]
                     cids = [r[0] for r in results_list]
                     clusters = searcher.cluster_search_results(cids, n_clusters=5)
-                    
-                    if len(clusters) > 1:
-                        st.caption("Auto-detected Contexts:")
-                        tab_labels = ["All"] + [f"{c['label']} ({c['count']})" for c in clusters]
-                        tabs = st.tabs(tab_labels)
-                        
-                        with tabs[0]:
-                            render_results(results_list, key_suffix="_all")
-                            
-                        for i, cluster in enumerate(clusters):
-                            with tabs[i+1]:
-                                cluster_cids = set(cluster["cids"])
-                                subset = [r for r in results_list if r[0] in cluster_cids]
-                                render_results(subset, key_suffix=f"_c{i}")
-                        
-                        # Skip default rendering
-                        results_list = [] 
                 except Exception:
-                    # Fallback
                     pass
 
+            render_results(results_list, key_suffix="_all")
+
             # Graph Visualization (Interactive)
-            # Pyvis is interactive but doesn't return selection easily in Streamlit without component
-            if filtered_results or results_list:
-                 with st.expander("Visualize Meta-Graph (Interactive)", expanded=False):
+            if results_list:
+                 with st.expander("Visualize Meta-Graph (Interactive)", expanded=True):
                     try:
                         searcher = st.session_state["kb_searcher"]
-                        viz_cids = [r[0] for r in (filtered_results or results_list)[:30]] # Limit to 30 nodes
-                        render_interactive_graph(searcher, viz_cids)
+                        viz_cids = [r[0] for r in results_list[:40]] # Limit to 40 nodes for performance
+                        render_interactive_graph(searcher, viz_cids, clusters=clusters)
                     except Exception as e:
                         st.error(f"Graph error: {e}")
-
-            selected_map = st.session_state.get("kb_results_selected") or {}
-            # Build aggregated text from only selected items BEFORE rendering list so the button sits above
-            if results_list:
-                selected_results = []
-                for cid, score, path, cname, snippet, full_text in results_list:
-                    sel_key = f"kb_sel_{cid}"
-                    sel_val = bool(st.session_state.get(sel_key, selected_map.get(cid, True)))
-                    if sel_val:
-                        selected_results.append((cid, score, path, cname, snippet, full_text))
-                if selected_results:
-                    sections = []
-                    for cid, score, path, cname, snippet, full_text in selected_results:
-                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
-                        sections.append(f"{header}\n\n{full_text.strip()}")
-                    aggregated_sel = "\n\n---\n\n".join(sections)
-                    # Enforce token cap similar to packaging
-                    try:
-                        max_tok = int(st.session_state.get("max_tokens_config") or 0)
-                        enc_name = st.session_state.get("encoding_name", "o200k_base")
-                        if max_tok and max_tok > 0:
-                            enc = get_encoding(enc_name)
-                            toks = enc.encode(aggregated_sel)
-                            if len(toks) > max_tok:
-                                aggregated_sel = enc.decode(toks[:max_tok])
-                    except Exception:
-                        aggregated_sel = aggregated_sel
-                else:
-                    aggregated_sel = ""
-                # Copy selected button ABOVE the results list with selected count and tooltip
-                sel_count = len(selected_results)
-                total_count = len(results_list)
-                copy_cols = st.columns([2, 1])
-                with copy_cols[0]:
-                    render_copy_button(
-                        "Copy all selected results",
-                        aggregated_sel,
-                        height=80,
-                        disabled=(sel_count == 0),
-                        help_text="Copies only the selected results",
-                    )
-                with copy_cols[1]:
-                    st.caption(f"Selected {sel_count} of {total_count}")
-                st.caption("Select which results to include below.")
-
-                # Now render list with checkboxes and update selection map (revert to previous full expander per item)
-                for i, (cid, score, path, cname, snippet, full_text) in enumerate(results_list):
-                    cols = st.columns([1, 24])
-                    with cols[0]:
-                        sel = st.checkbox("", value=bool(selected_map.get(cid, True)), key=f"kb_sel_{cid}")
-                        selected_map[cid] = bool(sel)
-                    with cols[1]:
-                        header = f"{path} :: {cname} — relevancy score {score:.3f}"
-                        with st.expander(header, expanded=(i == 0)):
-                            st.markdown(f"**{path} :: {cname} — relevancy score {score:.3f}**\n\n{full_text}")
-                # Persist selection state
-                st.session_state["kb_results_selected"] = dict(selected_map)
-            else:
-                # Fallback to aggregated rendering
-                st.markdown(st.session_state["kb_results_agg"])
         else:
             st.info("No search results found")
 

@@ -173,6 +173,41 @@ def init_schema(engine: Engine) -> None:
 				)
 		except Exception:
 			pass
+		# Feedback tracking for RL
+		conn.execute(
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS feedback (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					query TEXT,
+					chunk_id INTEGER,
+					score REAL,
+					created_at TEXT
+				)
+				"""
+			)
+		)
+		conn.execute(
+			text(
+				"""
+				CREATE INDEX IF NOT EXISTS idx_feedback_query ON feedback(query)
+				"""
+			)
+		)
+		# Search history for tuning/eval
+		conn.execute(
+			text(
+				"""
+				CREATE TABLE IF NOT EXISTS search_history (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					query TEXT,
+					params_json TEXT,
+					result_count INTEGER,
+					created_at TEXT
+				)
+				"""
+			)
+		)
 
 
 def ensure_job(job_id: str, name: str | None, input_dir: str, md_out_dir: str | None, sla_minutes: int | None = None) -> None:
@@ -670,4 +705,60 @@ def factory_reset_db() -> None:
 	except Exception:
 		# Best-effort reset; swallow exceptions to avoid breaking UI
 		return
+
+
+def record_feedback(query: str, chunk_id: int, score: float) -> None:
+	"""Record user feedback (thumbs up=1.0, down=-1.0) for a query result."""
+	engine = get_engine()
+	now = datetime.utcnow().isoformat()
+	with engine.begin() as conn:
+		conn.execute(
+			text("INSERT INTO feedback(query, chunk_id, score, created_at) VALUES(:q, :cid, :s, :now)"),
+			{"q": query.strip(), "cid": chunk_id, "s": score, "now": now}
+		)
+
+
+def fetch_feedback_for_query(query: str) -> List[Tuple[int, float]]:
+	"""Return list of (chunk_id, score) for a query."""
+	engine = get_engine()
+	with engine.begin() as conn:
+		rows = conn.execute(
+			text("SELECT chunk_id, score FROM feedback WHERE query=:q"),
+			{"q": query.strip()}
+		).fetchall()
+		return [(r[0], r[1]) for r in rows]
+
+def record_search_history(query: str, params: dict, count: int) -> int:
+	"""Log a search event and its parameters."""
+	import json
+	engine = get_engine()
+	now = datetime.utcnow().isoformat()
+	with engine.begin() as conn:
+		res = conn.execute(
+			text("INSERT INTO search_history(query, params_json, result_count, created_at) VALUES(:q, :p, :c, :now)"),
+			{"q": query, "p": json.dumps(params), "c": count, "now": now}
+		)
+		if res.lastrowid:
+			return int(res.lastrowid)
+		return 0
+
+def fetch_search_history(limit: int = 100) -> List[Dict]:
+	"""Return recent searches for tuning analysis."""
+	import json
+	engine = get_engine()
+	with engine.begin() as conn:
+		rows = conn.execute(
+			text("SELECT id, query, params_json, result_count, created_at FROM search_history ORDER BY id DESC LIMIT :limit"),
+			{"limit": limit}
+		)
+		out = []
+		for r in rows:
+			try:
+				params = json.loads(r[2])
+			except Exception:
+				params = {}
+			out.append({
+				"id": r[0], "query": r[1], "params": params, "count": r[3], "created_at": r[4]
+			})
+		return out
 
